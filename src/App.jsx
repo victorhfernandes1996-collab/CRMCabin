@@ -188,10 +188,10 @@ function Crm({ perfil, recarrega }) {
       {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} />}
       {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
       {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} abrir={setAberto} load={load} />}
-      {aba === "atividades" && <Atividades key={v} abrir={setAberto} />}
+      {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} vend={vend} perfil={perfil} />}
       {aba === "admin" && <Admin />}
       {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
-      {neg && <Negocio n={neg} perfil={perfil} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
+      {neg && <Negocio n={neg} perfil={perfil} vend={vend} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
     </div>
   );
 }
@@ -236,7 +236,7 @@ function Painel({ negocios, vend, pend, perfil }) {
         <Kpi t="Taxa de conversão" v={`${d.conv}%`} s="ganhos ÷ (ganhos + perdidos)" />
         <Kpi t="Ticket médio" v={brl(d.ganhos.length ? soma(d.ganhos) / d.ganhos.length : 0)} s="dos ganhos" />
         <Kpi t="Negócios parados" v={parados.length} s="7+ dias sem movimento ou atividade atrasada" cor={parados.length ? "#e5484d" : C.tx} />
-        <Kpi t="Atividades atrasadas" v={atrasadas} s="de toda a equipe" cor={atrasadas ? "#e5484d" : C.tx} />
+        <Kpi t="Atividades atrasadas" v={atrasadas} s={perfil.role === "admin" ? "de toda a equipe" : "suas"} cor={atrasadas ? "#e5484d" : C.tx} />
       </div>
       <div style={S.card}>
         <b>Funil (em aberto)</b>
@@ -422,7 +422,7 @@ function NovoNegocio({ clientes, load, fechar }) {
   );
 }
 
-function Negocio({ n, perfil, load, fechar }) {
+function Negocio({ n, perfil, vend, load, fechar }) {
   const [t, setT] = useState([]);
   const [h, setH] = useState([]);
   const [props, setProps] = useState([]);
@@ -475,6 +475,14 @@ function Negocio({ n, perfil, load, fechar }) {
             <button style={{ ...S.btn, background: "#d64545" }} onClick={() => encerrar("perdido")}>✕ Perdido</button>
           </>) : <button style={S.ghost} onClick={reabrir}>Reabrir negócio</button>}
         </div>
+        {perfil.role === "admin" && (
+          <label style={{ display: "block", marginTop: 10, color: C.mut, fontSize: 13 }}>Responsável{" "}
+            <select style={{ ...S.in, width: 200, marginBottom: 0 }} value={n.owner || ""}
+              onChange={async (e) => { await sb.from("negocios").update({ owner: e.target.value }).eq("id", n.id); await log(`Responsável alterado para ${nomeDe(vend, e.target.value)}`); load(); carrega(); }}>
+              {vend.map((x) => <option key={x.id} value={x.id}>{x.nome || x.email}</option>)}
+            </select>
+          </label>
+        )}
         {n.motivo_perda && <p style={{ color: C.mut }}>Motivo da perda: {n.motivo_perda}</p>}
       </div>
 
@@ -484,16 +492,17 @@ function Negocio({ n, perfil, load, fechar }) {
           <div key={x.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center" }}>
             <input type="checkbox" checked={x.feita} onChange={() => toggle(x)} />
             <span style={{ flex: 1, textDecoration: x.feita ? "line-through" : "none", color: x.feita ? C.mut : C.tx }}>
-              {x.titulo} {x.vencimento && <small style={{ color: C.or }}>({dataBR(x.vencimento)})</small>}
+              {icone(x.tipo)} {x.titulo} {x.vencimento && <small style={{ color: C.or }}>({dataBR(x.vencimento)}{horaFmt(x)})</small>}
             </span>
             <button style={S.ghost} onClick={() => del(x)}>×</button>
           </div>
         ))}
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <input style={{ ...S.in, marginBottom: 0 }} placeholder="Nova atividade" value={novo} onChange={(e) => setNovo(e.target.value)} />
-          <input style={{ ...S.in, marginBottom: 0, width: 150 }} type="date" value={venc} onChange={(e) => setVenc(e.target.value)} />
-          <button style={S.btn} onClick={addT}>+</button>
-        </div>
+        <AtividadeForm fixo={n} onSaved={carrega} />
+      </div>
+
+      <div style={S.card}>
+        <b>Contatos de {c.nome}</b>
+        <div style={{ marginTop: 6 }}><Contatos clienteId={n.cliente_id} /></div>
       </div>
 
       <div style={S.card}>
@@ -520,20 +529,109 @@ function Negocio({ n, perfil, load, fechar }) {
   );
 }
 
-function Atividades({ abrir }) {
+const TIPOS = { tarefa: "📝 Tarefa", ligacao: "📞 Ligação", whatsapp: "💬 WhatsApp", visita: "📍 Visita", reuniao: "👥 Reunião" };
+const icone = (t) => (TIPOS[t] || TIPOS.tarefa).split(" ")[0];
+const horaFmt = (x) => (x.hora ? ` ${x.hora.slice(0, 5)}` : "");
+
+function AtividadeForm({ negocios, fixo, onSaved }) {
+  const [f, setF] = useState({ negocio_id: fixo?.id || "", tipo: "tarefa", titulo: "", vencimento: "", hora: "" });
+  const salvar = async () => {
+    const n = fixo || negocios.find((x) => x.id === f.negocio_id);
+    if (!n) return alert("Escolha o negócio.");
+    if (!f.titulo.trim()) return;
+    const r = await sb.from("tarefas").insert({
+      cliente_id: n.cliente_id, negocio_id: n.id, titulo: f.titulo, tipo: f.tipo,
+      vencimento: f.vencimento || null, hora: f.hora || null, owner: n.owner || undefined,
+    });
+    if (r.error) return alert(r.error.message);
+    setF({ ...f, titulo: "", vencimento: "", hora: "" });
+    onSaved();
+  };
+  const w = { ...S.in, marginBottom: 0 };
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+      {!fixo && (
+        <select style={{ ...w, width: 220 }} value={f.negocio_id} onChange={(e) => setF({ ...f, negocio_id: e.target.value })}>
+          <option value="">Negócio…</option>
+          {negocios.filter((n) => n.status === "aberto").map((n) => <option key={n.id} value={n.id}>{n.titulo} — {n.clientes?.nome}</option>)}
+        </select>
+      )}
+      <select style={{ ...w, width: 140 }} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
+        {Object.entries(TIPOS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      <input style={{ ...w, flex: 1, minWidth: 160 }} placeholder="O que fazer?" value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })} />
+      <input style={{ ...w, width: 145 }} type="date" value={f.vencimento} onChange={(e) => setF({ ...f, vencimento: e.target.value })} />
+      <input style={{ ...w, width: 110 }} type="time" value={f.hora} onChange={(e) => setF({ ...f, hora: e.target.value })} />
+      <button style={S.btn} onClick={salvar}>+</button>
+    </div>
+  );
+}
+
+function Contatos({ clienteId }) {
+  const [l, setL] = useState([]);
+  const [f, setF] = useState({ nome: "", cargo: "", telefone: "", email: "" });
+  const load = async () => setL((await sb.from("contatos").select("*").eq("cliente_id", clienteId).order("created_at")).data || []);
+  useEffect(() => { load(); }, [clienteId]);
+  const add = async () => {
+    if (!f.nome.trim()) return;
+    const r = await sb.from("contatos").insert({ ...f, cliente_id: clienteId });
+    if (r.error) return alert(r.error.message);
+    setF({ nome: "", cargo: "", telefone: "", email: "" }); load();
+  };
+  const del = async (c) => { await sb.from("contatos").delete().eq("id", c.id); load(); };
+  const wa = (t) => { const d = (t || "").replace(/\D/g, ""); return d ? `https://wa.me/${d.startsWith("55") ? d : "55" + d}` : null; };
+  const w = { ...S.in, marginBottom: 0, flex: 1, minWidth: 120 };
+  return (
+    <div>
+      {l.map((c) => (
+        <div key={c.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ flex: 1 }}>
+            <b>{c.nome}</b> {c.cargo && <span style={{ color: C.mut }}>· {c.cargo}</span>}
+            {c.telefone && <> · <a style={{ color: C.or }} href={wa(c.telefone)} target="_blank" rel="noreferrer">{c.telefone}</a></>}
+            {c.email && <> · <a style={{ color: C.mut }} href={`mailto:${c.email}`}>{c.email}</a></>}
+          </span>
+          <button style={S.ghost} onClick={() => del(c)}>×</button>
+        </div>
+      ))}
+      {!l.length && <div style={{ color: C.mut, fontSize: 13 }}>Nenhum contato ainda.</div>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <input style={w} placeholder="Nome" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
+        <input style={w} placeholder="Cargo (pastor, mídia…)" value={f.cargo} onChange={(e) => setF({ ...f, cargo: e.target.value })} />
+        <input style={w} placeholder="Telefone" value={f.telefone} onChange={(e) => setF({ ...f, telefone: e.target.value })} />
+        <input style={w} placeholder="E-mail" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+        <button style={S.btn} onClick={add}>+</button>
+      </div>
+    </div>
+  );
+}
+
+function Atividades({ abrir, negocios, vend, perfil }) {
   const [t, setT] = useState([]);
-  const load = async () => setT((await sb.from("tarefas").select("*, clientes(nome), negocios(id, titulo)").eq("feita", false).order("vencimento")).data || []);
+  const [vf, setVf] = useState("todos");
+  const [novo, setNovo] = useState(false);
+  const load = async () => setT((await sb.from("tarefas").select("*, clientes(nome), negocios(id, titulo)").eq("feita", false).order("vencimento").order("hora")).data || []);
   useEffect(() => { load(); }, []);
   const h = hojeStr();
+  const l0 = t.filter((x) => vf === "todos" || x.owner === vf);
   const grupos = [
-    ["Atrasadas", t.filter((x) => x.vencimento && x.vencimento < h), "#e5484d"],
-    ["Hoje", t.filter((x) => x.vencimento === h), C.or],
-    ["Futuras", t.filter((x) => x.vencimento && x.vencimento > h), C.tx],
-    ["Sem data", t.filter((x) => !x.vencimento), C.mut],
+    ["Atrasadas", l0.filter((x) => x.vencimento && x.vencimento < h), "#e5484d"],
+    ["Hoje", l0.filter((x) => x.vencimento === h), C.or],
+    ["Futuras", l0.filter((x) => x.vencimento && x.vencimento > h), C.tx],
+    ["Sem data", l0.filter((x) => !x.vencimento), C.mut],
   ];
   const concluir = async (x) => { await sb.from("tarefas").update({ feita: true }).eq("id", x.id); load(); };
   return (
     <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <button style={S.btn} onClick={() => setNovo(!novo)}>+ Nova atividade</button>
+        {perfil.role === "admin" && (
+          <select style={{ ...S.in, width: 200, marginBottom: 0 }} value={vf} onChange={(e) => setVf(e.target.value)}>
+            <option value="todos">Toda a equipe</option>
+            {vend.map((x) => <option key={x.id} value={x.id}>{x.id === perfil.id ? "Eu" : x.nome || x.email}</option>)}
+          </select>
+        )}
+      </div>
+      {novo && <div style={S.card}><AtividadeForm negocios={negocios} onSaved={load} /></div>}
       {grupos.map(([nome, l, cor]) => (
         <div key={nome} style={S.card}>
           <b style={{ color: cor }}>{nome} ({l.length})</b>
@@ -541,11 +639,12 @@ function Atividades({ abrir }) {
             <div key={x.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center" }}>
               <input type="checkbox" onChange={() => concluir(x)} />
               <span style={{ flex: 1 }}>
-                {x.titulo}
+                {icone(x.tipo)} {x.titulo}
                 {x.negocios && <span style={{ color: C.or, cursor: "pointer" }} onClick={() => abrir(x.negocios.id)}> · {x.negocios.titulo}</span>}
                 {x.clientes && <span style={{ color: C.mut }}> · {x.clientes.nome}</span>}
+                {perfil.role === "admin" && <span style={{ color: C.mut }}> · {nomeDe(vend, x.owner)}</span>}
               </span>
-              {x.vencimento && <small style={{ color: cor }}>{dataBR(x.vencimento)}</small>}
+              {x.vencimento && <small style={{ color: cor }}>{dataBR(x.vencimento)}{horaFmt(x)}</small>}
             </div>
           ))}
           {!l.length && <div style={{ color: C.mut, fontSize: 13 }}>Nenhuma.</div>}
@@ -557,9 +656,11 @@ function Atividades({ abrir }) {
 
 function Clientes({ clientes, negocios, abrir, load }) {
   const [f, setF] = useState({ nome: "", igreja: "", telefone: "", cidade: "" });
+  const [abre, setAbre] = useState(null);
   const add = async () => {
     if (!f.nome.trim()) return;
-    await sb.from("clientes").insert(f);
+    const r = await sb.from("clientes").insert(f);
+    if (r.error) return alert(r.error.message);
     setF({ nome: "", igreja: "", telefone: "", cidade: "" });
     load();
   };
@@ -574,12 +675,18 @@ function Clientes({ clientes, negocios, abrir, load }) {
       </div>
       {clientes.map((c) => (
         <div key={c.id} style={S.card}>
-          <b>{c.nome}</b> <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`} {c.telefone && `· ${c.telefone}`}</span>
-          <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ flex: 1 }}>
+              <b>{c.nome}</b> <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`} {c.telefone && `· ${c.telefone}`}</span>
+            </span>
+            <button style={S.ghost} onClick={() => setAbre(abre === c.id ? null : c.id)}>{abre === c.id ? "Ocultar contatos" : "Contatos"}</button>
+          </div>
+          <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {negocios.filter((n) => n.cliente_id === c.id).map((n) => (
               <span key={n.id} style={{ cursor: "pointer" }} onClick={() => abrir(n.id)}><Badge s={n.status} /> {n.titulo} · {brl(n.preco)}</span>
             ))}
           </div>
+          {abre === c.id && <div style={{ marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}><Contatos clienteId={c.id} /></div>}
         </div>
       ))}
     </div>
