@@ -10,8 +10,8 @@ const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const configurado = Boolean(SB_URL && SB_KEY);
 const sb = configurado ? createClient(SB_URL, SB_KEY) : null;
 const PRODUTOS_PADRAO = [
-  { nome: "Cabine 180º - Fixo", preco: 9900, descricao: "Cabine 180º com piso fixo (instalação permanente)" },
-  { nome: "Cabine 180º - Móvel", preco: 10800, descricao: "Cabine 180º com piso móvel sobre rodas reforçadas" },
+  { nome: "Cabine 180º - Fixo", preco: 9900, desconto_max: 10, descricao: "Cabine 180º com piso fixo (instalação permanente)" },
+  { nome: "Cabine 180º - Móvel", preco: 10800, desconto_max: 10, descricao: "Cabine 180º com piso móvel sobre rodas reforçadas" },
 ];
 const ProdutosCtx = createContext(PRODUTOS_PADRAO);
 const brl = (n) => Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -174,6 +174,7 @@ function Crm({ perfil, recarrega }) {
   const [pend, setPend] = useState([]);
   const [metas, setMetas] = useState([]);
   const [produtos, setProdutos] = useState(PRODUTOS_PADRAO);
+  const [aprov, setAprov] = useState([]);
   const [aberto, setAberto] = useState(null);
   const [v, setV] = useState(0);
   const [aberta, setAberta] = useState(() => {
@@ -192,12 +193,14 @@ function Crm({ perfil, recarrega }) {
     setMetas((await sb.from("metas").select("*").eq("mes", mesISO())).data || []);
     const pr = await sb.from("produtos").select("*").eq("ativo", true).order("nome");
     if (pr.data?.length) setProdutos(pr.data);
+    if (perfil.role === "admin") setAprov((await sb.from("propostas").select("*, negocios(id, titulo, owner, clientes(nome))").eq("status_aprov", "pendente").order("created_at")).data || []);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, []);
   const admin = perfil.role === "admin";
-  const itens = [...MENU, ...(admin ? [["admin", "🔑", "Usuários"], ["produtos", "📦", "Produtos"]] : []), ["perfil", "👤", "Meu perfil"]];
+  const itens = [...MENU, ...(admin ? [["aprovacoes", "🔔", "Aprovações"], ["admin", "🔑", "Usuários"], ["produtos", "📦", "Produtos"]] : []), ["perfil", "👤", "Meu perfil"]];
   const atras = pend.filter((x) => x.vencimento && x.vencimento < hojeStr()).length;
   const neg = negocios.find((n) => n.id === aberto);
+  const badgeDe = (k) => (k === "atividades" ? atras : k === "aprovacoes" ? aprov.length : 0);
   return (
     <ProdutosCtx.Provider value={produtos}>
       <div style={{ display: "flex", background: C.bg, color: C.tx, minHeight: "100vh", fontFamily: "system-ui,sans-serif" }}>
@@ -211,8 +214,8 @@ function Crm({ perfil, recarrega }) {
               style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: aberta ? "flex-start" : "center", width: "100%", background: aba === k ? "#2a2016" : "transparent", color: aba === k ? C.or : C.tx, border: 0, borderLeft: `3px solid ${aba === k ? C.or : "transparent"}`, borderRadius: 8, padding: "10px", marginBottom: 2, cursor: "pointer", fontSize: 15, position: "relative" }}>
               <span style={{ fontSize: 18 }}>{ic}</span>
               {aberta && <span>{l}</span>}
-              {k === "atividades" && atras > 0 && (
-                <span style={{ marginLeft: aberta ? "auto" : 0, position: aberta ? "static" : "absolute", top: 2, right: 6, background: "#d64545", color: "#fff", borderRadius: 10, fontSize: 11, padding: "0 6px" }}>{atras}</span>
+              {badgeDe(k) > 0 && (
+                <span style={{ marginLeft: aberta ? "auto" : 0, position: aberta ? "static" : "absolute", top: 2, right: 6, background: "#d64545", color: "#fff", borderRadius: 10, fontSize: 11, padding: "0 6px" }}>{badgeDe(k)}</span>
               )}
             </button>
           ))}
@@ -228,9 +231,10 @@ function Crm({ perfil, recarrega }) {
           )}
           {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} metas={metas} load={load} />}
           {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
-          {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} abrir={setAberto} load={load} />}
+          {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} perfil={perfil} abrir={setAberto} load={load} />}
           {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} vend={vend} perfil={perfil} />}
           {aba === "admin" && <Admin />}
+          {aba === "aprovacoes" && <Aprovacoes itens={aprov} vend={vend} load={load} />}
           {aba === "produtos" && <Produtos recarrega={load} />}
           {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
         </main>
@@ -281,9 +285,99 @@ function MetasCard({ negocios, vend, metas, perfil, reload }) {
   );
 }
 
+const StatusAprov = ({ p }) => {
+  const m = {
+    ok: ["dentro da política", C.line], pendente: ["⏳ aguardando aprovação", "#8a6d1f"],
+    aprovada: ["✓ aprovada", "#1f7a3d"], recusada: ["✕ recusada", "#a32626"],
+  }[p.status_aprov || "ok"];
+  return <span style={{ background: m[1], borderRadius: 6, padding: "1px 7px", fontSize: 11 }}>{m[0]}{Number(p.desconto_pct) > 0 ? ` · ${p.desconto_pct}%` : ""}</span>;
+};
+const chaveProp = (x) => JSON.stringify([x.produto, Number(x.preco), Number(x.desconto || 0)]);
+
+async function acharDuplicados(nome, telefone, igreja) {
+  const r = await sb.rpc("buscar_duplicado", { p_nome: nome, p_telefone: telefone || null, p_igreja: igreja || null });
+  return r.data || [];
+}
+
+function AvisoDuplicado({ lista, perfil, onUsar, onMesmoAssim }) {
+  const alheio = lista.some((d) => d.dono_id !== perfil.id);
+  return (
+    <div style={{ ...S.card, borderColor: "#f5c542" }}>
+      <b style={{ color: "#f5c542" }}>⚠ Possível cliente duplicado</b>
+      {lista.map((d) => (
+        <div key={d.id} style={{ padding: "6px 0", fontSize: 14 }}>
+          {d.nome}{d.igreja ? ` — ${d.igreja}` : ""}{d.cidade ? ` · ${d.cidade}` : ""}
+          <span style={{ color: C.mut }}> · vendedor: {d.dono_id === perfil.id ? "você" : d.dono_nome || "—"} · {d.negocios_abertos} negócio(s) em aberto</span>
+          {onUsar && d.dono_id === perfil.id && <> <button style={S.ghost} onClick={() => onUsar(d)}>Usar este</button></>}
+        </div>
+      ))}
+      {alheio && perfil.role !== "admin"
+        ? <div style={{ color: C.mut, fontSize: 13 }}>Este cliente já é atendido por outro vendedor. Fale com o admin antes de cadastrar.</div>
+        : <button style={S.ghost} onClick={onMesmoAssim}>Cadastrar mesmo assim</button>}
+    </div>
+  );
+}
+
+function ProximaAtividade({ n, etapa, onOk, onCancel }) {
+  const [f, setF] = useState({ tipo: "ligacao", titulo: "", vencimento: "", hora: "" });
+  const salvar = async () => {
+    if (!f.titulo.trim() || !f.vencimento) return alert("Informe o que fazer e a data.");
+    const r = await sb.from("tarefas").insert({ cliente_id: n.cliente_id, negocio_id: n.id, titulo: f.titulo, tipo: f.tipo, vencimento: f.vencimento, hora: f.hora || null, owner: n.owner || undefined });
+    if (r.error) return alert(r.error.message);
+    onOk();
+  };
+  const w = { ...S.in, marginBottom: 0 };
+  return (
+    <Modal z={20}>
+      <div style={S.card}>
+        <b>Próxima atividade</b>
+        <p style={{ color: C.mut, fontSize: 14 }}>Para mover “{n.titulo}” para <b style={{ color: C.or }}>{etapa}</b>, agende o próximo passo com o cliente.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <select style={{ ...w, width: 140 }} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
+            {Object.entries(TIPOS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <input style={{ ...w, flex: 1, minWidth: 180 }} placeholder="O que fazer?" value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })} />
+          <input style={{ ...w, width: 145 }} type="date" value={f.vencimento} onChange={(e) => setF({ ...f, vencimento: e.target.value })} />
+          <input style={{ ...w, width: 110 }} type="time" value={f.hora} onChange={(e) => setF({ ...f, hora: e.target.value })} />
+        </div>
+        <button style={S.btn} onClick={salvar}>Agendar e mover</button> <button style={S.ghost} onClick={onCancel}>Cancelar</button>
+      </div>
+    </Modal>
+  );
+}
+
+function Aprovacoes({ itens, vend, load }) {
+  useEffect(() => { load(); }, []);
+  const decidir = async (p, status) => {
+    let obs = null;
+    if (status === "recusada") { obs = window.prompt("Motivo da recusa (o vendedor vai ver):"); if (obs === null) return; }
+    const r = await sb.from("propostas").update({ status_aprov: status, obs_aprov: obs }).eq("id", p.id);
+    if (r.error) return alert(r.error.message);
+    if (p.negocio_id) await sb.from("historico").insert({ negocio_id: p.negocio_id, texto: status === "aprovada" ? `Desconto de ${p.desconto_pct}% APROVADO` : `Desconto de ${p.desconto_pct}% RECUSADO${obs ? ": " + obs : ""}` });
+    load();
+  };
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>Aprovações de desconto</h3>
+      {!itens.length && <div style={{ color: C.mut }}>Nenhuma aprovação pendente.</div>}
+      {itens.map((p) => (
+        <div key={p.id} style={S.card}>
+          <div><b>{p.negocios?.titulo}</b> <span style={{ color: C.mut }}>{p.negocios?.clientes?.nome} · vendedor: {nomeDe(vend, p.negocios?.owner)}</span></div>
+          <div style={{ margin: "6px 0" }}>
+            {p.produto}: tabela {brl(p.preco_tabela)} → proposto <b style={{ color: C.or }}>{brl(p.preco - p.desconto)}</b> <StatusAprov p={p} />
+          </div>
+          {p.obs && <div style={{ color: C.mut, fontSize: 13, marginBottom: 6 }}>Obs.: {p.obs}</div>}
+          <button style={{ ...S.btn, background: "#2ea34f" }} onClick={() => decidir(p, "aprovada")}>✓ Aprovar</button>{" "}
+          <button style={{ ...S.btn, background: "#d64545" }} onClick={() => decidir(p, "recusada")}>✕ Recusar</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Produtos({ recarrega }) {
   const [l, setL] = useState([]);
-  const [f, setF] = useState({ nome: "", descricao: "", preco: "" });
+  const [f, setF] = useState({ nome: "", descricao: "", preco: "", desconto_max: "10" });
   const load = async () => setL((await sb.from("produtos").select("*").order("nome")).data || []);
   useEffect(() => { load(); }, []);
   const upd = async (id, v) => {
@@ -293,9 +387,9 @@ function Produtos({ recarrega }) {
   };
   const add = async () => {
     if (!f.nome.trim()) return;
-    const r = await sb.from("produtos").insert({ nome: f.nome.trim(), descricao: f.descricao, preco: Number(f.preco) || 0 });
+    const r = await sb.from("produtos").insert({ nome: f.nome.trim(), descricao: f.descricao, preco: Number(f.preco) || 0, desconto_max: Number(f.desconto_max) || 0 });
     if (r.error) return alert(r.error.message);
-    setF({ nome: "", descricao: "", preco: "" }); load(); recarrega();
+    setF({ nome: "", descricao: "", preco: "", desconto_max: "10" }); load(); recarrega();
   };
   const w = { ...S.in, marginBottom: 0 };
   return (
@@ -307,6 +401,7 @@ function Produtos({ recarrega }) {
           <input style={{ ...w, flex: 1, minWidth: 160 }} defaultValue={p.nome} onBlur={(e) => e.target.value !== p.nome && upd(p.id, { nome: e.target.value })} />
           <input style={{ ...w, flex: 2, minWidth: 200 }} defaultValue={p.descricao || ""} placeholder="Descrição (vai na proposta)" onBlur={(e) => e.target.value !== (p.descricao || "") && upd(p.id, { descricao: e.target.value })} />
           <input style={{ ...w, width: 120 }} type="number" defaultValue={p.preco} onBlur={(e) => Number(e.target.value) !== Number(p.preco) && upd(p.id, { preco: Number(e.target.value) })} />
+          <label style={{ fontSize: 13, color: C.mut }}>Desc. máx. %{" "}<input style={{ ...w, width: 80 }} type="number" min="0" max="100" defaultValue={p.desconto_max ?? 10} onBlur={(e) => Number(e.target.value) !== Number(p.desconto_max) && upd(p.id, { desconto_max: Number(e.target.value) })} /></label>
           <label style={{ fontSize: 14 }}><input type="checkbox" checked={p.ativo} onChange={(e) => upd(p.id, { ativo: e.target.checked })} /> Ativo</label>
         </div>
       ))}
@@ -316,6 +411,7 @@ function Produtos({ recarrega }) {
           <input style={{ ...w, flex: 1, minWidth: 160 }} placeholder="Nome" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
           <input style={{ ...w, flex: 2, minWidth: 200 }} placeholder="Descrição" value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })} />
           <input style={{ ...w, width: 120 }} type="number" placeholder="Preço" value={f.preco} onChange={(e) => setF({ ...f, preco: e.target.value })} />
+          <input style={{ ...w, width: 110 }} type="number" placeholder="Desc. máx. %" value={f.desconto_max} onChange={(e) => setF({ ...f, desconto_max: e.target.value })} />
           <button style={S.btn} onClick={add}>Adicionar</button>
         </div>
       </div>
@@ -483,11 +579,17 @@ function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
     (vf === "todos" || n.owner === vf) &&
     (!busca || `${n.titulo} ${n.clientes?.nome || ""}`.toLowerCase().includes(busca.toLowerCase())) &&
     (!soParados || parado(n, pend)));
-  const mover = async (n, etapa) => {
-    if (!etapa || etapa === n.etapa) return;
+  const [pedir, setPedir] = useState(null);
+  const temProx = (n) => pend.some((x) => x.negocio_id === n.id && (!x.vencimento || x.vencimento >= hojeStr()));
+  const efetua = async (n, etapa) => {
     await sb.from("negocios").update({ etapa }).eq("id", n.id);
     await sb.from("historico").insert({ negocio_id: n.id, texto: `Movido para ${etapa}` });
     load();
+  };
+  const mover = async (n, etapa) => {
+    if (!etapa || etapa === n.etapa) return;
+    if (!temProx(n)) return setPedir({ n, etapa });
+    efetua(n, etapa);
   };
   const card = (n) => {
     const i = ETAPAS.indexOf(n.etapa);
@@ -565,17 +667,22 @@ function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
           {!lista.length && <div style={{ color: C.mut }}>Nada por aqui ainda.</div>}
         </div>
       )}
-      {novo && <NovoNegocio clientes={clientes} load={load} fechar={() => setNovo(false)} />}
+      {pedir && <ProximaAtividade n={pedir.n} etapa={pedir.etapa} onCancel={() => setPedir(null)} onOk={() => { const x = pedir; setPedir(null); efetua(x.n, x.etapa); }} />}
+      {novo && <NovoNegocio clientes={clientes} perfil={perfil} load={load} fechar={() => setNovo(false)} />}
     </div>
   );
 }
 
-function NovoNegocio({ clientes, load, fechar }) {
+function NovoNegocio({ clientes, perfil, load, fechar }) {
   const PRODUTOS = useContext(ProdutosCtx);
+  const [dup, setDup] = useState([]);
   const [f, setF] = useState({ cliente_id: "", novo: "", titulo: "", produto: PRODUTOS[0].nome, preco: PRODUTOS[0].preco, origem: "", data_prevista: "" });
-  const salvar = async () => {
+  const salvar = async (force = false) => {
     let cid = f.cliente_id;
-    if (!cid && f.novo.trim()) cid = (await sb.from("clientes").insert({ nome: f.novo.trim() }).select().single()).data?.id;
+    if (!cid && f.novo.trim()) {
+      if (!force) { const d = await acharDuplicados(f.novo.trim()); if (d.length) { setDup(d); return; } }
+      cid = (await sb.from("clientes").insert({ nome: f.novo.trim() }).select().single()).data?.id;
+    }
     if (!cid) return alert("Escolha um cliente ou digite o nome de um novo.");
     const r = await sb.from("negocios").insert({ cliente_id: cid, titulo: f.titulo || f.produto, produto: f.produto, preco: f.preco, etapa: ETAPAS[0], origem: f.origem || null, data_prevista: f.data_prevista || null }).select().single();
     if (r.error) return alert(r.error.message);
@@ -603,7 +710,8 @@ function NovoNegocio({ clientes, load, fechar }) {
         <label style={{ color: C.mut, fontSize: 13 }}>Previsão de fechamento
           <input style={S.in} type="date" value={f.data_prevista} onChange={(e) => setF({ ...f, data_prevista: e.target.value })} />
         </label>
-        <button style={S.btn} onClick={salvar}>Criar</button> <button style={S.ghost} onClick={fechar}>Cancelar</button>
+        {dup.length > 0 && <AvisoDuplicado lista={dup} perfil={perfil} onUsar={(d) => { setF({ ...f, cliente_id: d.id, novo: "" }); setDup([]); }} onMesmoAssim={() => { setDup([]); salvar(true); }} />}
+        <button style={S.btn} onClick={() => salvar()}>Criar</button> <button style={S.ghost} onClick={fechar}>Cancelar</button>
       </div>
     </Modal>
   );
@@ -626,6 +734,8 @@ function Negocio({ n, perfil, vend, load, fechar }) {
   useEffect(() => { carrega(); }, [n.id]);
   const log = (texto) => sb.from("historico").insert({ negocio_id: n.id, texto });
   const salva = async (v) => { await sb.from("negocios").update(v).eq("id", n.id); load(); };
+  const [pedirEt, setPedirEt] = useState(null);
+  const moverEtapa = async (et) => { await sb.from("negocios").update({ etapa: et }).eq("id", n.id); await log(`Movido para ${et}`); load(); carrega(); };
   const encerrar = async (status) => {
     let motivo = null;
     if (status === "perdido") { motivo = window.prompt("Motivo da perda?"); if (motivo === null) return; }
@@ -657,7 +767,7 @@ function Negocio({ n, perfil, vend, load, fechar }) {
             onBlur={async (e) => { await sb.from("negocios").update({ preco: Number(e.target.value) }).eq("id", n.id); load(); }} /></label>
           {n.status === "aberto" ? (<>
             <select style={{ ...S.in, width: 190, marginBottom: 0 }} value={n.etapa}
-              onChange={async (e) => { await sb.from("negocios").update({ etapa: e.target.value }).eq("id", n.id); await log(`Movido para ${e.target.value}`); load(); carrega(); }}>
+              onChange={(e) => { const et = e.target.value; const tem = t.some((x) => !x.feita && (!x.vencimento || x.vencimento >= hojeStr())); if (!tem) return setPedirEt(et); moverEtapa(et); }}>
               {ETAPAS.map((x) => <option key={x}>{x}</option>)}
             </select>
             <button style={{ ...S.btn, background: "#2ea34f" }} onClick={() => encerrar("ganho")}>✓ Ganho</button>
@@ -713,7 +823,7 @@ function Negocio({ n, perfil, vend, load, fechar }) {
         <b>Propostas</b>
         {props.map((p) => (
           <div key={p.id} style={{ padding: "6px 0", display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>{p.produto} — {brl(p.preco - p.desconto)} <small style={{ color: C.mut }}>{new Date(p.created_at).toLocaleDateString("pt-BR")}</small></span>
+            <span style={{ flex: 1 }}>{p.produto} — {brl(p.preco - p.desconto)} <StatusAprov p={p} /> <small style={{ color: C.mut }}>{new Date(p.created_at).toLocaleDateString("pt-BR")}</small></span>
             <button style={S.ghost} onClick={() => setProp(p)}>Abrir</button>
           </div>
         ))}
@@ -728,6 +838,7 @@ function Negocio({ n, perfil, vend, load, fechar }) {
           </div>
         ))}
       </div>
+      {pedirEt && <ProximaAtividade n={n} etapa={pedirEt} onCancel={() => setPedirEt(null)} onOk={() => { const et = pedirEt; setPedirEt(null); moverEtapa(et); }} />}
       {prop && <Proposta c={c} p={prop} perfil={perfil} negocioId={n.id} fechar={() => { setProp(null); carrega(); load(); }} />}
     </Modal>
   );
@@ -858,14 +969,17 @@ function Atividades({ abrir, negocios, vend, perfil }) {
   );
 }
 
-function Clientes({ clientes, negocios, abrir, load }) {
+function Clientes({ clientes, negocios, perfil, abrir, load }) {
+  const [dup, setDup] = useState([]);
   const [f, setF] = useState({ nome: "", igreja: "", telefone: "", cidade: "" });
   const [abre, setAbre] = useState(null);
-  const add = async () => {
+  const add = async (force = false) => {
     if (!f.nome.trim()) return;
+    if (!force) { const d = await acharDuplicados(f.nome.trim(), f.telefone, f.igreja); if (d.length) { setDup(d); return; } }
     const r = await sb.from("clientes").insert(f);
     if (r.error) return alert(r.error.message);
     setF({ nome: "", igreja: "", telefone: "", cidade: "" });
+    setDup([]);
     load();
   };
   return (
@@ -875,7 +989,8 @@ function Clientes({ clientes, negocios, abrir, load }) {
         {["nome", "igreja", "telefone", "cidade"].map((k) => (
           <input key={k} style={{ ...S.in, marginTop: 8 }} placeholder={k[0].toUpperCase() + k.slice(1)} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
         ))}
-        <button style={S.btn} onClick={add}>Adicionar</button>
+        {dup.length > 0 && <AvisoDuplicado lista={dup} perfil={perfil} onMesmoAssim={() => add(true)} />}
+        <button style={S.btn} onClick={() => add()}>Adicionar</button>
       </div>
       {clientes.map((c) => (
         <div key={c.id} style={S.card}>
@@ -907,15 +1022,35 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
   const parc = saldo / (p.parcelas || 1);
   const desc = PRODUTOS.find((x) => x.nome === p.produto)?.descricao || "";
 
+  const pr = PRODUTOS.find((x) => x.nome === p.produto);
+  const tabela = Number(pr?.preco ?? p.preco);
+  const maxPct = Number(pr?.desconto_max ?? 10);
+  const piso = tabela * (1 - maxPct / 100);
+  const dentro = total >= piso - 0.005;
+  const descPct = tabela > 0 ? Math.round(1000 * (1 - total / tabela)) / 10 : 0;
+  const [snap, setSnap] = useState(() => (p.id ? chaveProp(p) : ""));
+  const mudou = chaveProp(p) !== snap;
+  const bloqueado = !dentro && (mudou || !p.id || p.status_aprov !== "aprovada");
+  const statusMsg = dentro ? "" : (mudou || !p.id) ? "salve para enviar para aprovação" : p.status_aprov === "aprovada" ? "✓ aprovada pelo admin" : p.status_aprov === "recusada" ? `✕ recusada${p.obs_aprov ? ": " + p.obs_aprov : ""}` : "⏳ aguardando aprovação do admin";
   const escolhe = (e) => {
     const pr = PRODUTOS.find((x) => x.nome === e.target.value);
     setP({ ...p, produto: pr.nome, preco: pr.preco });
   };
   const salvar = async () => {
-    const { nova, id, created_at, negocio_id, ...dados } = p;
-    if (p.id) await sb.from("propostas").update(dados).eq("id", p.id);
+    const { nova, id, created_at, negocio_id, status_aprov, preco_tabela, desconto_pct, aprovado_por, aprovado_em, obs_aprov, autor, ...dados } = p;
+    let rowId = p.id;
+    if (rowId) { const r = await sb.from("propostas").update(dados).eq("id", rowId); if (r.error) return alert(r.error.message); }
+    else { const r = await sb.from("propostas").insert({ ...dados, cliente_id: c.id, negocio_id: negocioId }).select().single(); if (r.error) return alert(r.error.message); rowId = r.data.id; }
     if (negocioId) await sb.from("negocios").update({ preco: total, produto: p.produto }).eq("id", negocioId);
-    if (!p.id) { const r = await sb.from("propostas").insert({ ...dados, cliente_id: c.id, negocio_id: negocioId }).select().single(); if (r.data) setP(r.data); }
+    const r2 = await sb.from("propostas").select("*").eq("id", rowId).single();
+    if (r2.data) {
+      const novo = !p.id || chaveProp(r2.data) !== snap;
+      setP(r2.data); setSnap(chaveProp(r2.data));
+      if (r2.data.status_aprov === "pendente" && novo) {
+        if (negocioId) await sb.from("historico").insert({ negocio_id: negocioId, texto: `Desconto de ${r2.data.desconto_pct}% enviado para aprovação` });
+        alert("Desconto acima do limite: a proposta foi enviada para aprovação do admin.");
+      }
+    }
   };
   const canvas = () => html2canvas(ref.current, { scale: 2, backgroundColor: "#ffffff" });
   const png = async () => {
@@ -981,6 +1116,9 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
           </div>
           <label>Prazo<input style={S.in} value={p.prazo} onChange={set("prazo")} /></label>
           <label>Observações (cor do carpete, frete, etc.)<textarea style={{ ...S.in, height: 60 }} value={p.obs || ""} onChange={set("obs")} /></label>
+          <div style={{ fontSize: 13, margin: "0 0 8px", color: dentro ? C.mut : "#ff8a8a" }}>
+            Tabela {brl(tabela)} · desconto {descPct}% (limite {maxPct}%) · piso {brl(piso)}{!dentro && ` — ${statusMsg}`}
+          </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "4px 0 12px", alignItems: "center" }}>
             {contatos.length > 0 && (
               <select style={{ ...S.in, width: 240, marginBottom: 0 }} value={tel} onChange={(e) => setTel(e.target.value)}>
@@ -988,11 +1126,11 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
               </select>
             )}
             <input style={{ ...S.in, width: 190, marginBottom: 0 }} placeholder="WhatsApp do contato" value={tel} onChange={(e) => setTel(e.target.value)} />
-            <button style={{ ...S.btn, background: "#2ea34f" }} onClick={enviarWhats}>Enviar pelo WhatsApp</button>
+            <button disabled={bloqueado} style={{ ...S.btn, background: "#2ea34f", opacity: bloqueado ? 0.4 : 1 }} onClick={enviarWhats}>Enviar pelo WhatsApp</button>
           </div>
           <button style={S.btn} onClick={salvar}>Salvar</button>{" "}
-          <button style={S.btn} onClick={pdf}>Baixar PDF</button>{" "}
-          <button style={S.btn} onClick={png}>Baixar imagem</button>{" "}
+          <button disabled={bloqueado} style={{ ...S.btn, opacity: bloqueado ? 0.4 : 1 }} onClick={pdf}>Baixar PDF</button>{" "}
+          <button disabled={bloqueado} style={{ ...S.btn, opacity: bloqueado ? 0.4 : 1 }} onClick={png}>Baixar imagem</button>{" "}
           <button style={S.ghost} onClick={fechar}>Fechar</button>
         </div>
 
