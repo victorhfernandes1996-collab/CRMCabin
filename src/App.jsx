@@ -1,6 +1,6 @@
 // CabinCraft CRM — npm i @supabase/supabase-js html2canvas jspdf
 // .env: VITE_SUPABASE_URL=...  VITE_SUPABASE_ANON_KEY=...
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
@@ -9,10 +9,11 @@ const SB_URL = import.meta.env.VITE_SUPABASE_URL;
 const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const configurado = Boolean(SB_URL && SB_KEY);
 const sb = configurado ? createClient(SB_URL, SB_KEY) : null;
-const PRODUTOS = [
-  { nome: "Cabine 180º - Fixo", preco: 9900, desc: "Cabine 180º com piso fixo (instalação permanente)" },
-  { nome: "Cabine 180º - Móvel", preco: 10800, desc: "Cabine 180º com piso móvel sobre rodas reforçadas" },
+const PRODUTOS_PADRAO = [
+  { nome: "Cabine 180º - Fixo", preco: 9900, descricao: "Cabine 180º com piso fixo (instalação permanente)" },
+  { nome: "Cabine 180º - Móvel", preco: 10800, descricao: "Cabine 180º com piso móvel sobre rodas reforçadas" },
 ];
+const ProdutosCtx = createContext(PRODUTOS_PADRAO);
 const brl = (n) => Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const C = { bg: "#15171b", card: "#1e2126", line: "#333842", or: "#f28c0f", tx: "#f3f0ea", mut: "#9aa0aa" };
 const S = {
@@ -38,9 +39,10 @@ export default function Root() {
 function App() {
   const [session, setSession] = useState(undefined);
   const [perfil, setPerfil] = useState(null);
+  const [recup, setRecup] = useState(false);
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data } = sb.auth.onAuthStateChange((e, s) => { setSession(s); if (e === "PASSWORD_RECOVERY") setRecup(true); });
     return () => data.subscription.unsubscribe();
   }, []);
   const carregaPerfil = async () => {
@@ -50,6 +52,7 @@ function App() {
   useEffect(() => { if (session) carregaPerfil(); else setPerfil(null); }, [session]);
 
   if (session === undefined) return <div style={S.page}>Carregando…</div>;
+  if (recup) return <NovaSenha onOk={() => setRecup(false)} />;
   if (!session) return <Auth />;
   if (!perfil) return <div style={S.page}>Carregando perfil…</div>;
   if (!perfil.aprovado)
@@ -79,6 +82,11 @@ function Auth() {
     else if (modo === "cadastro" && !r.data.session) setMsg("Cadastro feito! Confirme seu e-mail (se exigido) e aguarde aprovação.");
   };
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const esqueci = async () => {
+    if (!f.email) return setMsg("Digite seu e-mail acima e clique de novo.");
+    const r = await sb.auth.resetPasswordForEmail(f.email, { redirectTo: window.location.origin });
+    setMsg(r.error ? r.error.message : "Enviamos um link para redefinir sua senha. Confira seu e-mail.");
+  };
   return (
     <div style={{ ...S.page, display: "grid", placeItems: "center" }}>
       <div style={{ ...S.card, width: 340 }}>
@@ -87,6 +95,7 @@ function Auth() {
         <input style={S.in} placeholder="E-mail" value={f.email} onChange={set("email")} />
         <input style={S.in} placeholder="Senha" type="password" value={f.senha} onChange={set("senha")} />
         <button style={{ ...S.btn, width: "100%" }} onClick={enviar}>{modo === "login" ? "Entrar" : "Solicitar acesso"}</button>
+        {modo === "login" && <p style={{ color: C.or, fontSize: 13, cursor: "pointer", marginBottom: 0 }} onClick={esqueci}>Esqueci minha senha</p>}
         {msg && <p style={{ color: C.mut, fontSize: 13 }}>{msg}</p>}
         <p style={{ color: C.mut, fontSize: 13, cursor: "pointer" }} onClick={() => setModo(modo === "login" ? "cadastro" : "login")}>
           {modo === "login" ? "Não tem conta? Solicitar acesso" : "Já tenho conta"}
@@ -154,52 +163,187 @@ const Kpi = ({ t, v, s, cor }) => (
   </div>
 );
 
+const MENU = [["painel", "📊", "Painel"], ["negocios", "💼", "Negócios"], ["clientes", "👥", "Clientes"], ["atividades", "✅", "Atividades"]];
+const mesISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; };
+
 function Crm({ perfil, recarrega }) {
   const [aba, setAba] = useState("painel");
   const [clientes, setClientes] = useState([]);
   const [negocios, setNegocios] = useState([]);
   const [vend, setVend] = useState([]);
   const [pend, setPend] = useState([]);
+  const [metas, setMetas] = useState([]);
+  const [produtos, setProdutos] = useState(PRODUTOS_PADRAO);
   const [aberto, setAberto] = useState(null);
   const [v, setV] = useState(0);
+  const [aberta, setAberta] = useState(() => {
+    try { const x = localStorage.getItem("sidebar"); if (x !== null) return x === "1"; } catch (e) {}
+    return window.innerWidth >= 800;
+  });
+  const alterna = () => {
+    const n = !aberta; setAberta(n);
+    try { localStorage.setItem("sidebar", n ? "1" : "0"); } catch (e) {}
+  };
   const load = async () => {
     setClientes((await sb.from("clientes").select("*").order("nome")).data || []);
     setNegocios((await sb.from("negocios").select("*, clientes(nome, igreja)").order("created_at", { ascending: false })).data || []);
     setVend((await sb.rpc("listar_vendedores")).data || []);
     setPend((await sb.from("tarefas").select("negocio_id, vencimento").eq("feita", false)).data || []);
+    setMetas((await sb.from("metas").select("*").eq("mes", mesISO())).data || []);
+    const pr = await sb.from("produtos").select("*").eq("ativo", true).order("nome");
+    if (pr.data?.length) setProdutos(pr.data);
   };
   useEffect(() => { load(); }, []);
-  const tabs = [["painel", "Painel"], ["negocios", "Negócios"], ["clientes", "Clientes"], ["atividades", "Atividades"],
-    ...(perfil.role === "admin" ? [["admin", "Usuários"]] : []), ["perfil", "Meu perfil"]];
+  const admin = perfil.role === "admin";
+  const itens = [...MENU, ...(admin ? [["admin", "🔑", "Usuários"], ["produtos", "📦", "Produtos"]] : []), ["perfil", "👤", "Meu perfil"]];
+  const atras = pend.filter((x) => x.vencimento && x.vencimento < hojeStr()).length;
   const neg = negocios.find((n) => n.id === aberto);
   return (
-    <div style={S.page}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        <b style={{ color: C.or, fontSize: 18 }}>CabinCraft CRM</b>
-        {tabs.map(([k, l]) => (
-          <button key={k} style={{ ...S.ghost, borderColor: aba === k ? C.or : C.line, color: aba === k ? C.or : C.tx }} onClick={() => setAba(k)}>{l}</button>
-        ))}
-        <span style={{ flex: 1 }} />
-        <span style={{ color: C.mut, fontSize: 13 }}>{perfil.nome || perfil.email}</span>
-        <button style={S.ghost} onClick={() => sb.auth.signOut()}>Sair</button>
+    <ProdutosCtx.Provider value={produtos}>
+      <div style={{ display: "flex", background: C.bg, color: C.tx, minHeight: "100vh", fontFamily: "system-ui,sans-serif" }}>
+        <aside style={{ width: aberta ? 210 : 64, flexShrink: 0, background: "#101216", borderRight: `1px solid ${C.line}`, position: "sticky", top: 0, height: "100vh", display: "flex", flexDirection: "column", padding: 8, boxSizing: "border-box", transition: "width .15s" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: aberta ? "space-between" : "center", padding: "6px 4px 12px" }}>
+            {aberta && <b style={{ color: C.or, fontSize: 17 }}>CabinCraft</b>}
+            <button title={aberta ? "Recolher menu" : "Expandir menu"} style={{ ...S.ghost, padding: "4px 10px" }} onClick={alterna}>{aberta ? "«" : "»"}</button>
+          </div>
+          {itens.map(([k, ic, l]) => (
+            <button key={k} title={l} onClick={() => setAba(k)}
+              style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: aberta ? "flex-start" : "center", width: "100%", background: aba === k ? "#2a2016" : "transparent", color: aba === k ? C.or : C.tx, border: 0, borderLeft: `3px solid ${aba === k ? C.or : "transparent"}`, borderRadius: 8, padding: "10px", marginBottom: 2, cursor: "pointer", fontSize: 15, position: "relative" }}>
+              <span style={{ fontSize: 18 }}>{ic}</span>
+              {aberta && <span>{l}</span>}
+              {k === "atividades" && atras > 0 && (
+                <span style={{ marginLeft: aberta ? "auto" : 0, position: aberta ? "static" : "absolute", top: 2, right: 6, background: "#d64545", color: "#fff", borderRadius: 10, fontSize: 11, padding: "0 6px" }}>{atras}</span>
+              )}
+            </button>
+          ))}
+          <div style={{ flex: 1 }} />
+          {aberta && <div style={{ color: C.mut, fontSize: 12, padding: "4px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{perfil.nome || perfil.email}</div>}
+          <button title="Sair" style={{ ...S.ghost, width: "100%" }} onClick={() => sb.auth.signOut()}>{aberta ? "Sair" : "⎋"}</button>
+        </aside>
+        <main style={{ flex: 1, minWidth: 0, padding: 16 }}>
+          {!perfil.whatsapp && aba !== "perfil" && (
+            <div style={{ ...S.card, borderColor: C.or }}>
+              Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
+            </div>
+          )}
+          {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} metas={metas} load={load} />}
+          {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
+          {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} abrir={setAberto} load={load} />}
+          {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} vend={vend} perfil={perfil} />}
+          {aba === "admin" && <Admin />}
+          {aba === "produtos" && <Produtos recarrega={load} />}
+          {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
+        </main>
+        {neg && <Negocio n={neg} perfil={perfil} vend={vend} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
       </div>
-      {!perfil.whatsapp && aba !== "perfil" && (
-        <div style={{ ...S.card, borderColor: C.or }}>
-          Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
+    </ProdutosCtx.Provider>
+  );
+}
+
+function MetasCard({ negocios, vend, metas, perfil, reload }) {
+  const hoje = new Date();
+  const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  const admin = perfil.role === "admin";
+  const lista = admin ? vend : vend.filter((x) => x.id === perfil.id);
+  const real = (id) => soma(negocios.filter((n) => n.owner === id && n.status === "ganho" && n.fechado_em && new Date(n.fechado_em) >= ini));
+  const meta = (id) => Number(metas.find((m) => m.vendedor_id === id)?.valor || 0);
+  const salvar = async (id, valor) => {
+    const r = await sb.from("metas").upsert({ vendedor_id: id, mes: mesISO(), valor: Number(valor) || 0 }, { onConflict: "vendedor_id,mes" });
+    if (r.error) alert(r.error.message);
+    reload();
+  };
+  const barra = (r, m) => {
+    const pct = m > 0 ? Math.round((100 * r) / m) : 0;
+    return (
+      <div style={{ flex: 1, minWidth: 140 }}>
+        <div style={{ background: C.bg, borderRadius: 6, height: 10 }}>
+          <div style={{ background: pct >= 100 ? "#3ecf6e" : C.or, width: `${Math.min(100, pct)}%`, height: 10, borderRadius: 6 }} />
         </div>
-      )}
-      {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} />}
-      {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
-      {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} abrir={setAberto} load={load} />}
-      {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} vend={vend} perfil={perfil} />}
-      {aba === "admin" && <Admin />}
-      {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
-      {neg && <Negocio n={neg} perfil={perfil} vend={vend} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
+        <small style={{ color: C.mut }}>{brl(r)} de {brl(m)} · {pct}%</small>
+      </div>
+    );
+  };
+  const totM = lista.reduce((s, x) => s + meta(x.id), 0);
+  const totR = lista.reduce((s, x) => s + real(x.id), 0);
+  return (
+    <div style={S.card}>
+      <b>Metas do mês</b>
+      {admin && <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "8px 0", flexWrap: "wrap" }}><span style={{ minWidth: 140 }}>Time todo</span>{barra(totR, totM)}</div>}
+      {lista.map((x) => (
+        <div key={x.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "6px 0", flexWrap: "wrap", borderTop: `1px solid ${C.line}` }}>
+          <span style={{ minWidth: 140 }}>{x.id === perfil.id ? "Eu" : x.nome || x.email}</span>
+          {barra(real(x.id), meta(x.id))}
+          {admin && <input key={meta(x.id)} style={{ ...S.in, width: 130, marginBottom: 0 }} type="number" placeholder="Meta R$" defaultValue={meta(x.id) || ""} onBlur={(e) => { if (Number(e.target.value) !== meta(x.id)) salvar(x.id, e.target.value); }} />}
+        </div>
+      ))}
+      {!admin && !meta(perfil.id) && <div style={{ color: C.mut, fontSize: 13 }}>O admin ainda não definiu sua meta deste mês.</div>}
     </div>
   );
 }
 
-function Painel({ negocios, vend, pend, perfil }) {
+function Produtos({ recarrega }) {
+  const [l, setL] = useState([]);
+  const [f, setF] = useState({ nome: "", descricao: "", preco: "" });
+  const load = async () => setL((await sb.from("produtos").select("*").order("nome")).data || []);
+  useEffect(() => { load(); }, []);
+  const upd = async (id, v) => {
+    const r = await sb.from("produtos").update(v).eq("id", id);
+    if (r.error) alert(r.error.message);
+    load(); recarrega();
+  };
+  const add = async () => {
+    if (!f.nome.trim()) return;
+    const r = await sb.from("produtos").insert({ nome: f.nome.trim(), descricao: f.descricao, preco: Number(f.preco) || 0 });
+    if (r.error) return alert(r.error.message);
+    setF({ nome: "", descricao: "", preco: "" }); load(); recarrega();
+  };
+  const w = { ...S.in, marginBottom: 0 };
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>Catálogo de produtos</h3>
+      <div style={{ color: C.mut, fontSize: 13, marginBottom: 10 }}>O preço aqui é o padrão. Em cada negócio e proposta ele continua editável.</div>
+      {l.map((p) => (
+        <div key={p.id} style={{ ...S.card, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", opacity: p.ativo ? 1 : 0.55 }}>
+          <input style={{ ...w, flex: 1, minWidth: 160 }} defaultValue={p.nome} onBlur={(e) => e.target.value !== p.nome && upd(p.id, { nome: e.target.value })} />
+          <input style={{ ...w, flex: 2, minWidth: 200 }} defaultValue={p.descricao || ""} placeholder="Descrição (vai na proposta)" onBlur={(e) => e.target.value !== (p.descricao || "") && upd(p.id, { descricao: e.target.value })} />
+          <input style={{ ...w, width: 120 }} type="number" defaultValue={p.preco} onBlur={(e) => Number(e.target.value) !== Number(p.preco) && upd(p.id, { preco: Number(e.target.value) })} />
+          <label style={{ fontSize: 14 }}><input type="checkbox" checked={p.ativo} onChange={(e) => upd(p.id, { ativo: e.target.checked })} /> Ativo</label>
+        </div>
+      ))}
+      <div style={S.card}>
+        <b>Novo produto</b>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <input style={{ ...w, flex: 1, minWidth: 160 }} placeholder="Nome" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
+          <input style={{ ...w, flex: 2, minWidth: 200 }} placeholder="Descrição" value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })} />
+          <input style={{ ...w, width: 120 }} type="number" placeholder="Preço" value={f.preco} onChange={(e) => setF({ ...f, preco: e.target.value })} />
+          <button style={S.btn} onClick={add}>Adicionar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NovaSenha({ onOk }) {
+  const [s, setS] = useState("");
+  const [msg, setMsg] = useState("");
+  const salvar = async () => {
+    if (s.length < 6) return setMsg("Use pelo menos 6 caracteres.");
+    const r = await sb.auth.updateUser({ password: s });
+    if (r.error) setMsg(r.error.message); else onOk();
+  };
+  return (
+    <div style={{ ...S.page, display: "grid", placeItems: "center" }}>
+      <div style={{ ...S.card, width: 340 }}>
+        <h2 style={{ color: C.or, marginTop: 0 }}>Nova senha</h2>
+        <input style={S.in} type="password" placeholder="Digite a nova senha" value={s} onChange={(e) => setS(e.target.value)} />
+        <button style={{ ...S.btn, width: "100%" }} onClick={salvar}>Salvar nova senha</button>
+        {msg && <p style={{ color: C.mut, fontSize: 13 }}>{msg}</p>}
+      </div>
+    </div>
+  );
+}
+
+function Painel({ negocios, vend, pend, perfil, metas, load }) {
   const [vf, setVf] = useState("todos");
   const [per, setPer] = useState("mes");
   const agora = new Date();
@@ -255,6 +399,7 @@ function Painel({ negocios, vend, pend, perfil }) {
         <Kpi t="Negócios parados" v={parados.length} s="7+ dias sem movimento ou atividade atrasada" cor={parados.length ? "#e5484d" : C.tx} />
         <Kpi t="Atividades atrasadas" v={atrasadas} s={perfil.role === "admin" ? "de toda a equipe" : "suas"} cor={atrasadas ? "#e5484d" : C.tx} />
       </div>
+      <MetasCard negocios={negocios} vend={vend} metas={metas} perfil={perfil} reload={load} />
       <div style={S.card}>
         <b>Funil (em aberto)</b>
         {ETAPAS.map((e) => {
@@ -426,6 +571,7 @@ function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
 }
 
 function NovoNegocio({ clientes, load, fechar }) {
+  const PRODUTOS = useContext(ProdutosCtx);
   const [f, setF] = useState({ cliente_id: "", novo: "", titulo: "", produto: PRODUTOS[0].nome, preco: PRODUTOS[0].preco, origem: "", data_prevista: "" });
   const salvar = async () => {
     let cid = f.cliente_id;
@@ -464,6 +610,7 @@ function NovoNegocio({ clientes, load, fechar }) {
 }
 
 function Negocio({ n, perfil, vend, load, fechar }) {
+  const PRODUTOS = useContext(ProdutosCtx);
   const [t, setT] = useState([]);
   const [h, setH] = useState([]);
   const [props, setProps] = useState([]);
@@ -751,13 +898,14 @@ function Clientes({ clientes, negocios, abrir, load }) {
 }
 
 function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
+  const PRODUTOS = useContext(ProdutosCtx);
   const [p, setP] = useState(inicial);
   const ref = useRef();
   const set = (k, num) => (e) => setP({ ...p, [k]: num ? Number(e.target.value) : e.target.value });
   const total = Number(p.preco) - Number(p.desconto || 0);
   const saldo = total - Number(p.entrada || 0);
   const parc = saldo / (p.parcelas || 1);
-  const desc = PRODUTOS.find((x) => x.nome === p.produto)?.desc || "";
+  const desc = PRODUTOS.find((x) => x.nome === p.produto)?.descricao || "";
 
   const escolhe = (e) => {
     const pr = PRODUTOS.find((x) => x.nome === e.target.value);
