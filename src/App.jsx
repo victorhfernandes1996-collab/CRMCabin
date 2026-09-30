@@ -5,7 +5,10 @@ import { createClient } from "@supabase/supabase-js";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 
-const sb = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
+const SB_URL = import.meta.env.VITE_SUPABASE_URL;
+const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const configurado = Boolean(SB_URL && SB_KEY);
+const sb = configurado ? createClient(SB_URL, SB_KEY) : null;
 const PRODUTOS = [
   { nome: "Cabine 180º - Fixo", preco: 9900, desc: "Cabine 180º com piso fixo (instalação permanente)" },
   { nome: "Cabine 180º - Móvel", preco: 10800, desc: "Cabine 180º com piso móvel sobre rodas reforçadas" },
@@ -20,7 +23,19 @@ const S = {
   ghost: { background: "transparent", color: C.tx, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer" },
 };
 
-export default function App() {
+export default function Root() {
+  if (!configurado)
+    return (
+      <div style={{ background: "#15171b", color: "#f3f0ea", minHeight: "100vh", padding: 24, fontFamily: "system-ui,sans-serif" }}>
+        <h2 style={{ color: "#f28c0f" }}>Variáveis do Supabase não encontradas</h2>
+        <p>Cadastre <b>VITE_SUPABASE_URL</b> e <b>VITE_SUPABASE_ANON_KEY</b> nas Environment Variables da Vercel e faça um novo Redeploy.</p>
+        <p style={{ color: "#9aa0aa" }}>URL: {SB_URL ? "ok" : "faltando"} · Chave: {SB_KEY ? "ok" : "faltando"}</p>
+      </div>
+    );
+  return <App />;
+}
+
+function App() {
   const [session, setSession] = useState(undefined);
   const [perfil, setPerfil] = useState(null);
   useEffect(() => {
@@ -48,7 +63,7 @@ export default function App() {
         </div>
       </div>
     );
-  return <Crm perfil={perfil} />;
+  return <Crm perfil={perfil} recarrega={carregaPerfil} />;
 }
 
 function Auth() {
@@ -81,24 +96,6 @@ function Auth() {
   );
 }
 
-function Crm({ perfil }) {
-  const [aba, setAba] = useState("clientes");
-  const [sel, setSel] = useState(null);
-  return (
-    <div style={S.page}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        <b style={{ color: C.or, fontSize: 18 }}>CabinCraft CRM</b>
-        <button style={S.ghost} onClick={() => { setAba("clientes"); setSel(null); }}>Clientes</button>
-        {perfil.role === "admin" && <button style={S.ghost} onClick={() => setAba("admin")}>Usuários</button>}
-        <span style={{ flex: 1 }} />
-        <span style={{ color: C.mut, fontSize: 13 }}>{perfil.nome || perfil.email}</span>
-        <button style={S.ghost} onClick={() => sb.auth.signOut()}>Sair</button>
-      </div>
-      {aba === "admin" ? <Admin /> : sel ? <Cliente c={sel} voltar={() => setSel(null)} /> : <Clientes abrir={setSel} />}
-    </div>
-  );
-}
-
 function Admin() {
   const [l, setL] = useState([]);
   const load = async () => setL((await sb.from("profiles").select("*").order("created_at", { ascending: false })).data || []);
@@ -124,11 +121,317 @@ function Admin() {
   );
 }
 
-function Clientes({ abrir }) {
-  const [l, setL] = useState([]);
-  const [f, setF] = useState({ nome: "", igreja: "", telefone: "", cidade: "" });
-  const load = async () => setL((await sb.from("clientes").select("*").order("created_at", { ascending: false })).data || []);
+const ETAPAS = ["Apresentação", "Construir Proposta", "Negociação", "Fechamento", "Contrato"];
+const hojeStr = () => new Date().toLocaleDateString("sv-SE");
+const dataBR = (d) => new Date(d + "T00:00").toLocaleDateString("pt-BR");
+const Modal = ({ children, z = 5 }) => (
+  <div style={{ position: "fixed", inset: 0, background: "#000c", overflow: "auto", padding: 16, zIndex: z }}>
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>{children}</div>
+  </div>
+);
+const Badge = ({ s }) => (
+  <span style={{ background: s === "ganho" ? "#1f7a3d" : s === "perdido" ? "#a32626" : C.line, borderRadius: 6, padding: "2px 8px", fontSize: 12 }}>
+    {s === "aberto" ? "em andamento" : s}
+  </span>
+);
+
+function Crm({ perfil, recarrega }) {
+  const [aba, setAba] = useState("negocios");
+  const [clientes, setClientes] = useState([]);
+  const [negocios, setNegocios] = useState([]);
+  const [aberto, setAberto] = useState(null);
+  const [v, setV] = useState(0);
+  const load = async () => {
+    setClientes((await sb.from("clientes").select("*").order("nome")).data || []);
+    setNegocios((await sb.from("negocios").select("*, clientes(nome, igreja)").order("created_at", { ascending: false })).data || []);
+  };
   useEffect(() => { load(); }, []);
+  const tabs = [["negocios", "Negócios"], ["clientes", "Clientes"], ["atividades", "Atividades"],
+    ...(perfil.role === "admin" ? [["admin", "Usuários"]] : []), ["perfil", "Meu perfil"]];
+  const neg = negocios.find((n) => n.id === aberto);
+  return (
+    <div style={S.page}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <b style={{ color: C.or, fontSize: 18 }}>CabinCraft CRM</b>
+        {tabs.map(([k, l]) => (
+          <button key={k} style={{ ...S.ghost, borderColor: aba === k ? C.or : C.line, color: aba === k ? C.or : C.tx }} onClick={() => setAba(k)}>{l}</button>
+        ))}
+        <span style={{ flex: 1 }} />
+        <span style={{ color: C.mut, fontSize: 13 }}>{perfil.nome || perfil.email}</span>
+        <button style={S.ghost} onClick={() => sb.auth.signOut()}>Sair</button>
+      </div>
+      {!perfil.whatsapp && aba !== "perfil" && (
+        <div style={{ ...S.card, borderColor: C.or }}>
+          Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
+        </div>
+      )}
+      {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} abrir={setAberto} load={load} />}
+      {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} abrir={setAberto} load={load} />}
+      {aba === "atividades" && <Atividades key={v} abrir={setAberto} />}
+      {aba === "admin" && <Admin />}
+      {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
+      {neg && <Negocio n={neg} perfil={perfil} load={load} fechar={() => { setAberto(null); setV(v + 1); }} />}
+    </div>
+  );
+}
+
+function Perfil({ perfil, recarrega }) {
+  const [f, setF] = useState({ nome: perfil.nome || "", whatsapp: perfil.whatsapp || "" });
+  const [ok, setOk] = useState(false);
+  const salvar = async () => {
+    const r = await sb.rpc("atualizar_meu_perfil", { p_nome: f.nome, p_whatsapp: f.whatsapp });
+    if (r.error) return alert(r.error.message);
+    await recarrega(); setOk(true);
+  };
+  return (
+    <div style={{ ...S.card, maxWidth: 420 }}>
+      <b>Meu perfil</b>
+      <input style={{ ...S.in, marginTop: 8 }} placeholder="Nome" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
+      <input style={S.in} placeholder="Seu WhatsApp, ex.: (19) 99999-9999" value={f.whatsapp} onChange={(e) => setF({ ...f, whatsapp: e.target.value })} />
+      <button style={S.btn} onClick={salvar}>Salvar</button> {ok && <span style={{ color: C.mut }}>Salvo!</span>}
+    </div>
+  );
+}
+
+function Negocios({ negocios, clientes, abrir, load }) {
+  const [filtro, setFiltro] = useState("aberto");
+  const [novo, setNovo] = useState(false);
+  const lista = negocios.filter((n) => filtro === "todos" || n.status === filtro);
+  const mover = async (n, etapa) => {
+    if (!etapa || etapa === n.etapa) return;
+    await sb.from("negocios").update({ etapa }).eq("id", n.id);
+    await sb.from("historico").insert({ negocio_id: n.id, texto: `Movido para ${etapa}` });
+    load();
+  };
+  const card = (n) => {
+    const i = ETAPAS.indexOf(n.etapa);
+    return (
+      <div key={n.id} draggable onDragStart={(e) => e.dataTransfer.setData("id", n.id)} onClick={() => abrir(n.id)}
+        style={{ ...S.card, marginBottom: 8, padding: 10, cursor: "pointer" }}>
+        <b>{n.titulo}</b>
+        <div style={{ color: C.mut, fontSize: 13 }}>{n.clientes?.nome}</div>
+        <div style={{ color: C.or, fontWeight: 700, margin: "4px 0" }}>{brl(n.preco)}</div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <button style={S.ghost} disabled={i <= 0} onClick={(e) => { e.stopPropagation(); mover(n, ETAPAS[i - 1]); }}>‹</button>
+          <button style={S.ghost} disabled={i >= ETAPAS.length - 1} onClick={(e) => { e.stopPropagation(); mover(n, ETAPAS[i + 1]); }}>›</button>
+        </div>
+      </div>
+    );
+  };
+  const filtros = [["aberto", "Em andamento"], ["ganho", "Ganhos"], ["perdido", "Perdidos"], ["todos", "Todos"]];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <button style={S.btn} onClick={() => setNovo(true)}>+ Novo negócio</button>
+        {filtros.map(([k, l]) => (
+          <button key={k} style={{ ...S.ghost, borderColor: filtro === k ? C.or : C.line, color: filtro === k ? C.or : C.tx }} onClick={() => setFiltro(k)}>
+            {l} ({k === "todos" ? negocios.length : negocios.filter((n) => n.status === k).length})
+          </button>
+        ))}
+      </div>
+      {filtro === "aberto" ? (
+        <div style={{ display: "grid", gridAutoFlow: "column", gridAutoColumns: "minmax(230px,1fr)", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
+          {ETAPAS.map((et) => {
+            const col = lista.filter((n) => n.etapa === et);
+            return (
+              <div key={et} onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { const n = negocios.find((x) => x.id === e.dataTransfer.getData("id")); if (n) mover(n, et); }}
+                style={{ background: "#191c21", borderRadius: 10, padding: 8, minHeight: 240 }}>
+                <div style={{ fontWeight: 700 }}>{et}</div>
+                <div style={{ color: C.mut, fontSize: 12, marginBottom: 8 }}>{col.length} · {brl(col.reduce((s, n) => s + Number(n.preco || 0), 0))}</div>
+                {col.map(card)}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div>
+          <div style={{ color: C.mut, marginBottom: 8 }}>Total: {brl(lista.reduce((s, n) => s + Number(n.preco || 0), 0))}</div>
+          {lista.map((n) => (
+            <div key={n.id} style={{ ...S.card, cursor: "pointer", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }} onClick={() => abrir(n.id)}>
+              <div style={{ flex: 1 }}>
+                <b>{n.titulo}</b> <span style={{ color: C.mut }}>{n.clientes?.nome}</span>
+                {n.motivo_perda && <div style={{ color: C.mut, fontSize: 13 }}>Motivo: {n.motivo_perda}</div>}
+              </div>
+              <span style={{ color: C.or, fontWeight: 700 }}>{brl(n.preco)}</span>
+              {n.fechado_em && <small style={{ color: C.mut }}>{new Date(n.fechado_em).toLocaleDateString("pt-BR")}</small>}
+              <Badge s={n.status} />
+            </div>
+          ))}
+          {!lista.length && <div style={{ color: C.mut }}>Nada por aqui ainda.</div>}
+        </div>
+      )}
+      {novo && <NovoNegocio clientes={clientes} load={load} fechar={() => setNovo(false)} />}
+    </div>
+  );
+}
+
+function NovoNegocio({ clientes, load, fechar }) {
+  const [f, setF] = useState({ cliente_id: "", novo: "", titulo: "", produto: PRODUTOS[0].nome, preco: PRODUTOS[0].preco });
+  const salvar = async () => {
+    let cid = f.cliente_id;
+    if (!cid && f.novo.trim()) cid = (await sb.from("clientes").insert({ nome: f.novo.trim() }).select().single()).data?.id;
+    if (!cid) return alert("Escolha um cliente ou digite o nome de um novo.");
+    const r = await sb.from("negocios").insert({ cliente_id: cid, titulo: f.titulo || f.produto, produto: f.produto, preco: f.preco, etapa: ETAPAS[0] }).select().single();
+    if (r.error) return alert(r.error.message);
+    await sb.from("historico").insert({ negocio_id: r.data.id, texto: "Negócio criado" });
+    load(); fechar();
+  };
+  return (
+    <Modal>
+      <div style={S.card}>
+        <b>Novo negócio</b>
+        <select style={{ ...S.in, marginTop: 8 }} value={f.cliente_id} onChange={(e) => setF({ ...f, cliente_id: e.target.value })}>
+          <option value="">Escolher cliente existente…</option>
+          {clientes.map((c) => <option key={c.id} value={c.id}>{c.nome}{c.igreja ? ` — ${c.igreja}` : ""}</option>)}
+        </select>
+        {!f.cliente_id && <input style={S.in} placeholder="…ou nome do novo cliente" value={f.novo} onChange={(e) => setF({ ...f, novo: e.target.value })} />}
+        <input style={S.in} placeholder="Título (opcional)" value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })} />
+        <select style={S.in} value={f.produto} onChange={(e) => { const p = PRODUTOS.find((x) => x.nome === e.target.value); setF({ ...f, produto: p.nome, preco: p.preco }); }}>
+          {PRODUTOS.map((p) => <option key={p.nome}>{p.nome}</option>)}
+        </select>
+        <input style={S.in} type="number" value={f.preco} onChange={(e) => setF({ ...f, preco: Number(e.target.value) })} />
+        <button style={S.btn} onClick={salvar}>Criar</button> <button style={S.ghost} onClick={fechar}>Cancelar</button>
+      </div>
+    </Modal>
+  );
+}
+
+function Negocio({ n, perfil, load, fechar }) {
+  const [t, setT] = useState([]);
+  const [h, setH] = useState([]);
+  const [props, setProps] = useState([]);
+  const [novo, setNovo] = useState("");
+  const [venc, setVenc] = useState("");
+  const [prop, setProp] = useState(null);
+  const c = { id: n.cliente_id, nome: n.clientes?.nome, igreja: n.clientes?.igreja };
+  const carrega = async () => {
+    setT((await sb.from("tarefas").select("*").eq("negocio_id", n.id).order("created_at")).data || []);
+    setH((await sb.from("historico").select("*").eq("negocio_id", n.id).order("created_at", { ascending: false })).data || []);
+    setProps((await sb.from("propostas").select("*").eq("negocio_id", n.id).order("created_at", { ascending: false })).data || []);
+  };
+  useEffect(() => { carrega(); }, [n.id]);
+  const log = (texto) => sb.from("historico").insert({ negocio_id: n.id, texto });
+  const encerrar = async (status) => {
+    let motivo = null;
+    if (status === "perdido") { motivo = window.prompt("Motivo da perda?"); if (motivo === null) return; }
+    await sb.from("negocios").update({ status, motivo_perda: motivo, fechado_em: new Date().toISOString() }).eq("id", n.id);
+    await log(status === "ganho" ? "Marcado como GANHO" : `Marcado como PERDIDO${motivo ? ": " + motivo : ""}`);
+    await load(); carrega();
+  };
+  const reabrir = async () => {
+    await sb.from("negocios").update({ status: "aberto", motivo_perda: null, fechado_em: null }).eq("id", n.id);
+    await log("Negócio reaberto"); await load(); carrega();
+  };
+  const addT = async () => {
+    if (!novo.trim()) return;
+    await sb.from("tarefas").insert({ cliente_id: n.cliente_id, negocio_id: n.id, titulo: novo, vencimento: venc || null });
+    setNovo(""); setVenc(""); carrega();
+  };
+  const toggle = async (x) => { await sb.from("tarefas").update({ feita: !x.feita }).eq("id", x.id); carrega(); };
+  const del = async (x) => { await sb.from("tarefas").delete().eq("id", x.id); carrega(); };
+  return (
+    <Modal>
+      <div style={S.card}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, flex: 1 }}>{n.titulo} <span style={{ color: C.mut, fontWeight: 400 }}>{c.nome}</span></h3>
+          <Badge s={n.status} />
+          <button style={S.ghost} onClick={fechar}>Fechar</button>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <label>Valor <input key={n.preco} style={{ ...S.in, width: 140, marginBottom: 0 }} type="number" defaultValue={n.preco}
+            onBlur={async (e) => { await sb.from("negocios").update({ preco: Number(e.target.value) }).eq("id", n.id); load(); }} /></label>
+          {n.status === "aberto" ? (<>
+            <select style={{ ...S.in, width: 190, marginBottom: 0 }} value={n.etapa}
+              onChange={async (e) => { await sb.from("negocios").update({ etapa: e.target.value }).eq("id", n.id); await log(`Movido para ${e.target.value}`); load(); carrega(); }}>
+              {ETAPAS.map((x) => <option key={x}>{x}</option>)}
+            </select>
+            <button style={{ ...S.btn, background: "#2ea34f" }} onClick={() => encerrar("ganho")}>✓ Ganho</button>
+            <button style={{ ...S.btn, background: "#d64545" }} onClick={() => encerrar("perdido")}>✕ Perdido</button>
+          </>) : <button style={S.ghost} onClick={reabrir}>Reabrir negócio</button>}
+        </div>
+        {n.motivo_perda && <p style={{ color: C.mut }}>Motivo da perda: {n.motivo_perda}</p>}
+      </div>
+
+      <div style={S.card}>
+        <b>Atividades</b>
+        {t.map((x) => (
+          <div key={x.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center" }}>
+            <input type="checkbox" checked={x.feita} onChange={() => toggle(x)} />
+            <span style={{ flex: 1, textDecoration: x.feita ? "line-through" : "none", color: x.feita ? C.mut : C.tx }}>
+              {x.titulo} {x.vencimento && <small style={{ color: C.or }}>({dataBR(x.vencimento)})</small>}
+            </span>
+            <button style={S.ghost} onClick={() => del(x)}>×</button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <input style={{ ...S.in, marginBottom: 0 }} placeholder="Nova atividade" value={novo} onChange={(e) => setNovo(e.target.value)} />
+          <input style={{ ...S.in, marginBottom: 0, width: 150 }} type="date" value={venc} onChange={(e) => setVenc(e.target.value)} />
+          <button style={S.btn} onClick={addT}>+</button>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <b>Propostas</b>
+        {props.map((p) => (
+          <div key={p.id} style={{ padding: "6px 0", display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ flex: 1 }}>{p.produto} — {brl(p.preco - p.desconto)} <small style={{ color: C.mut }}>{new Date(p.created_at).toLocaleDateString("pt-BR")}</small></span>
+            <button style={S.ghost} onClick={() => setProp(p)}>Abrir</button>
+          </div>
+        ))}
+        <button style={{ ...S.btn, marginTop: 8 }} onClick={() => setProp({ produto: n.produto || PRODUTOS[0].nome, preco: n.preco, desconto: 0, entrada: 0, parcelas: 1, prazo: "15 dias úteis", obs: "" })}>+ Nova proposta</button>
+      </div>
+
+      <div style={S.card}>
+        <b>Histórico</b>
+        {h.map((x) => (
+          <div key={x.id} style={{ padding: "4px 0", fontSize: 14 }}>
+            <small style={{ color: C.mut }}>{new Date(x.created_at).toLocaleString("pt-BR")}</small> · {x.texto}
+          </div>
+        ))}
+      </div>
+      {prop && <Proposta c={c} p={prop} perfil={perfil} negocioId={n.id} fechar={() => { setProp(null); carrega(); load(); }} />}
+    </Modal>
+  );
+}
+
+function Atividades({ abrir }) {
+  const [t, setT] = useState([]);
+  const load = async () => setT((await sb.from("tarefas").select("*, clientes(nome), negocios(id, titulo)").eq("feita", false).order("vencimento")).data || []);
+  useEffect(() => { load(); }, []);
+  const h = hojeStr();
+  const grupos = [
+    ["Atrasadas", t.filter((x) => x.vencimento && x.vencimento < h), "#e5484d"],
+    ["Hoje", t.filter((x) => x.vencimento === h), C.or],
+    ["Futuras", t.filter((x) => x.vencimento && x.vencimento > h), C.tx],
+    ["Sem data", t.filter((x) => !x.vencimento), C.mut],
+  ];
+  const concluir = async (x) => { await sb.from("tarefas").update({ feita: true }).eq("id", x.id); load(); };
+  return (
+    <div>
+      {grupos.map(([nome, l, cor]) => (
+        <div key={nome} style={S.card}>
+          <b style={{ color: cor }}>{nome} ({l.length})</b>
+          {l.map((x) => (
+            <div key={x.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center" }}>
+              <input type="checkbox" onChange={() => concluir(x)} />
+              <span style={{ flex: 1 }}>
+                {x.titulo}
+                {x.negocios && <span style={{ color: C.or, cursor: "pointer" }} onClick={() => abrir(x.negocios.id)}> · {x.negocios.titulo}</span>}
+                {x.clientes && <span style={{ color: C.mut }}> · {x.clientes.nome}</span>}
+              </span>
+              {x.vencimento && <small style={{ color: cor }}>{dataBR(x.vencimento)}</small>}
+            </div>
+          ))}
+          {!l.length && <div style={{ color: C.mut, fontSize: 13 }}>Nenhuma.</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Clientes({ clientes, negocios, abrir, load }) {
+  const [f, setF] = useState({ nome: "", igreja: "", telefone: "", cidade: "" });
   const add = async () => {
     if (!f.nome.trim()) return;
     await sb.from("clientes").insert(f);
@@ -144,76 +447,21 @@ function Clientes({ abrir }) {
         ))}
         <button style={S.btn} onClick={add}>Adicionar</button>
       </div>
-      {l.map((c) => (
-        <div key={c.id} style={{ ...S.card, cursor: "pointer" }} onClick={() => abrir(c)}>
-          <b>{c.nome}</b> <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`}</span>
+      {clientes.map((c) => (
+        <div key={c.id} style={S.card}>
+          <b>{c.nome}</b> <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`} {c.telefone && `· ${c.telefone}`}</span>
+          <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {negocios.filter((n) => n.cliente_id === c.id).map((n) => (
+              <span key={n.id} style={{ cursor: "pointer" }} onClick={() => abrir(n.id)}><Badge s={n.status} /> {n.titulo} · {brl(n.preco)}</span>
+            ))}
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function Cliente({ c, voltar }) {
-  const [t, setT] = useState([]);
-  const [novo, setNovo] = useState("");
-  const [venc, setVenc] = useState("");
-  const [props, setProps] = useState([]);
-  const [prop, setProp] = useState(null);
-  const load = async () => {
-    setT((await sb.from("tarefas").select("*").eq("cliente_id", c.id).order("created_at")).data || []);
-    setProps((await sb.from("propostas").select("*").eq("cliente_id", c.id).order("created_at", { ascending: false })).data || []);
-  };
-  useEffect(() => { load(); }, []);
-  const addT = async () => {
-    if (!novo.trim()) return;
-    await sb.from("tarefas").insert({ cliente_id: c.id, titulo: novo, vencimento: venc || null });
-    setNovo(""); setVenc(""); load();
-  };
-  const toggle = async (x) => { await sb.from("tarefas").update({ feita: !x.feita }).eq("id", x.id); load(); };
-  const del = async (x) => { await sb.from("tarefas").delete().eq("id", x.id); load(); };
-
-  return (
-    <div>
-      <button style={S.ghost} onClick={voltar}>← Voltar</button>
-      <h3>{c.nome} <span style={{ color: C.mut, fontWeight: 400 }}>{c.igreja}</span></h3>
-
-      <div style={S.card}>
-        <b>Tarefas</b>
-        {t.map((x) => (
-          <div key={x.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center" }}>
-            <input type="checkbox" checked={x.feita} onChange={() => toggle(x)} />
-            <span style={{ flex: 1, textDecoration: x.feita ? "line-through" : "none", color: x.feita ? C.mut : C.tx }}>
-              {x.titulo} {x.vencimento && <small style={{ color: C.or }}>({new Date(x.vencimento + "T00:00").toLocaleDateString("pt-BR")})</small>}
-            </span>
-            <button style={S.ghost} onClick={() => del(x)}>×</button>
-          </div>
-        ))}
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <input style={{ ...S.in, marginBottom: 0 }} placeholder="Nova tarefa" value={novo} onChange={(e) => setNovo(e.target.value)} />
-          <input style={{ ...S.in, marginBottom: 0, width: 150 }} type="date" value={venc} onChange={(e) => setVenc(e.target.value)} />
-          <button style={S.btn} onClick={addT}>+</button>
-        </div>
-      </div>
-
-      <div style={S.card}>
-        <b>Propostas</b>
-        {props.map((p) => (
-          <div key={p.id} style={{ padding: "6px 0", display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>{p.produto} — {brl(p.preco - p.desconto)} <small style={{ color: C.mut }}>{new Date(p.created_at).toLocaleDateString("pt-BR")}</small></span>
-            <button style={S.ghost} onClick={() => setProp(p)}>Abrir</button>
-          </div>
-        ))}
-        <button style={{ ...S.btn, marginTop: 8 }} onClick={() => setProp({ produto: PRODUTOS[0].nome, preco: PRODUTOS[0].preco, desconto: 0, entrada: 0, parcelas: 1, prazo: "15 dias úteis", obs: "", nova: true })}>
-          + Nova proposta
-        </button>
-      </div>
-
-      {prop && <Proposta c={c} p={prop} fechar={() => { setProp(null); load(); }} />}
-    </div>
-  );
-}
-
-function Proposta({ c, p: inicial, fechar }) {
+function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
   const [p, setP] = useState(inicial);
   const ref = useRef();
   const set = (k, num) => (e) => setP({ ...p, [k]: num ? Number(e.target.value) : e.target.value });
@@ -227,9 +475,10 @@ function Proposta({ c, p: inicial, fechar }) {
     setP({ ...p, produto: pr.nome, preco: pr.preco });
   };
   const salvar = async () => {
-    const { nova, id, created_at, ...dados } = p;
+    const { nova, id, created_at, negocio_id, ...dados } = p;
     if (p.id) await sb.from("propostas").update(dados).eq("id", p.id);
-    else { const r = await sb.from("propostas").insert({ ...dados, cliente_id: c.id }).select().single(); if (r.data) setP(r.data); }
+    if (negocioId) await sb.from("negocios").update({ preco: total, produto: p.produto }).eq("id", negocioId);
+    if (!p.id) { const r = await sb.from("propostas").insert({ ...dados, cliente_id: c.id, negocio_id: negocioId }).select().single(); if (r.data) setP(r.data); }
   };
   const canvas = () => html2canvas(ref.current, { scale: 2, backgroundColor: "#ffffff" });
   const png = async () => {
@@ -301,7 +550,7 @@ function Proposta({ c, p: inicial, fechar }) {
           <div style={{ fontSize: 14, color: "#444" }}>Produção: {p.prazo}. Frete a combinar. Instalação pela equipe técnica.</div>
           {p.obs && <><h4 style={{ marginBottom: 6 }}>Observações</h4><div style={{ fontSize: 14, color: "#444", whiteSpace: "pre-wrap" }}>{p.obs}</div></>}
           <div style={{ marginTop: 30, fontSize: 13, color: "#666", borderTop: "1px solid #ddd", paddingTop: 10 }}>
-            WhatsApp (19) 98816-5943 · Instagram @cabincraftbr
+            {perfil.nome}{perfil.whatsapp && ` · WhatsApp ${perfil.whatsapp}`} · Instagram @cabincraftbr
           </div>
         </div>
       </div>
