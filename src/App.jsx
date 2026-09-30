@@ -135,18 +135,38 @@ const Badge = ({ s }) => (
   </span>
 );
 
+const diasParado = (n) => Math.floor((Date.now() - new Date(n.atualizado_em || n.created_at)) / 864e5);
+const infoNeg = (n, pend) => {
+  const p = pend.filter((x) => x.negocio_id === n.id);
+  return { dias: diasParado(n), semProx: p.length === 0, atrasada: p.some((x) => x.vencimento && x.vencimento < hojeStr()) };
+};
+const parado = (n, pend) => n.status === "aberto" && (diasParado(n) >= 7 || infoNeg(n, pend).atrasada);
+const nomeDe = (vend, id) => { const v = vend.find((x) => x.id === id); return v ? v.nome || v.email?.split("@")[0] : "—"; };
+const soma = (l) => l.reduce((s, n) => s + Number(n.preco || 0), 0);
+const Kpi = ({ t, v, s, cor }) => (
+  <div style={{ ...S.card, marginBottom: 0 }}>
+    <div style={{ color: C.mut, fontSize: 12 }}>{t}</div>
+    <div style={{ fontSize: 22, fontWeight: 800, color: cor || C.tx }}>{v}</div>
+    {s && <div style={{ color: C.mut, fontSize: 12 }}>{s}</div>}
+  </div>
+);
+
 function Crm({ perfil, recarrega }) {
-  const [aba, setAba] = useState("negocios");
+  const [aba, setAba] = useState("painel");
   const [clientes, setClientes] = useState([]);
   const [negocios, setNegocios] = useState([]);
+  const [vend, setVend] = useState([]);
+  const [pend, setPend] = useState([]);
   const [aberto, setAberto] = useState(null);
   const [v, setV] = useState(0);
   const load = async () => {
     setClientes((await sb.from("clientes").select("*").order("nome")).data || []);
     setNegocios((await sb.from("negocios").select("*, clientes(nome, igreja)").order("created_at", { ascending: false })).data || []);
+    setVend((await sb.rpc("listar_vendedores")).data || []);
+    setPend((await sb.from("tarefas").select("negocio_id, vencimento").eq("feita", false)).data || []);
   };
   useEffect(() => { load(); }, []);
-  const tabs = [["negocios", "Negócios"], ["clientes", "Clientes"], ["atividades", "Atividades"],
+  const tabs = [["painel", "Painel"], ["negocios", "Negócios"], ["clientes", "Clientes"], ["atividades", "Atividades"],
     ...(perfil.role === "admin" ? [["admin", "Usuários"]] : []), ["perfil", "Meu perfil"]];
   const neg = negocios.find((n) => n.id === aberto);
   return (
@@ -165,12 +185,93 @@ function Crm({ perfil, recarrega }) {
           Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
         </div>
       )}
-      {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} abrir={setAberto} load={load} />}
+      {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} />}
+      {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
       {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} abrir={setAberto} load={load} />}
       {aba === "atividades" && <Atividades key={v} abrir={setAberto} />}
       {aba === "admin" && <Admin />}
       {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
-      {neg && <Negocio n={neg} perfil={perfil} load={load} fechar={() => { setAberto(null); setV(v + 1); }} />}
+      {neg && <Negocio n={neg} perfil={perfil} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
+    </div>
+  );
+}
+
+function Painel({ negocios, vend, pend, perfil }) {
+  const [vf, setVf] = useState("todos");
+  const [per, setPer] = useState("mes");
+  const agora = new Date();
+  const ini = per === "mes" ? new Date(agora.getFullYear(), agora.getMonth(), 1) : per === "90" ? new Date(Date.now() - 90 * 864e5) : new Date(0);
+  const noPer = (n) => n.fechado_em && new Date(n.fechado_em) >= ini;
+  const dados = (base) => {
+    const abertos = base.filter((n) => n.status === "aberto");
+    const ganhos = base.filter((n) => n.status === "ganho" && noPer(n));
+    const perdidos = base.filter((n) => n.status === "perdido" && noPer(n));
+    const fin = ganhos.length + perdidos.length;
+    return { abertos, ganhos, perdidos, conv: fin ? Math.round((100 * ganhos.length) / fin) : 0 };
+  };
+  const base = negocios.filter((n) => vf === "todos" || n.owner === vf);
+  const d = dados(base);
+  const parados = d.abertos.filter((n) => parado(n, pend));
+  const atrasadas = pend.filter((x) => x.vencimento && x.vencimento < hojeStr()).length;
+  const max = Math.max(1, ...ETAPAS.map((e) => soma(d.abertos.filter((n) => n.etapa === e))));
+  const motivos = {};
+  d.perdidos.forEach((n) => { const m = (n.motivo_perda || "Sem motivo").trim().toLowerCase(); motivos[m] = (motivos[m] || 0) + 1; });
+  const topMotivos = Object.entries(motivos).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const donos = [...new Set(negocios.map((n) => n.owner).filter(Boolean))];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <select style={{ ...S.in, width: 200, marginBottom: 0 }} value={vf} onChange={(e) => setVf(e.target.value)}>
+          <option value="todos">Todos os vendedores</option>
+          {vend.map((x) => <option key={x.id} value={x.id}>{x.id === perfil.id ? "Eu" : x.nome || x.email}</option>)}
+        </select>
+        <select style={{ ...S.in, width: 200, marginBottom: 0 }} value={per} onChange={(e) => setPer(e.target.value)}>
+          <option value="mes">Este mês</option><option value="90">Últimos 90 dias</option><option value="tudo">Todo o período</option>
+        </select>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginBottom: 12 }}>
+        <Kpi t="Em aberto" v={brl(soma(d.abertos))} s={`${d.abertos.length} negócios`} />
+        <Kpi t="Ganhos no período" v={brl(soma(d.ganhos))} s={`${d.ganhos.length} negócios`} cor="#3ecf6e" />
+        <Kpi t="Perdidos no período" v={brl(soma(d.perdidos))} s={`${d.perdidos.length} negócios`} cor="#e5484d" />
+        <Kpi t="Taxa de conversão" v={`${d.conv}%`} s="ganhos ÷ (ganhos + perdidos)" />
+        <Kpi t="Ticket médio" v={brl(d.ganhos.length ? soma(d.ganhos) / d.ganhos.length : 0)} s="dos ganhos" />
+        <Kpi t="Negócios parados" v={parados.length} s="7+ dias sem movimento ou atividade atrasada" cor={parados.length ? "#e5484d" : C.tx} />
+        <Kpi t="Atividades atrasadas" v={atrasadas} s="de toda a equipe" cor={atrasadas ? "#e5484d" : C.tx} />
+      </div>
+      <div style={S.card}>
+        <b>Funil (em aberto)</b>
+        {ETAPAS.map((e) => {
+          const l = d.abertos.filter((n) => n.etapa === e);
+          return (
+            <div key={e} style={{ margin: "8px 0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><span>{e} · {l.length}</span><span style={{ color: C.or }}>{brl(soma(l))}</span></div>
+              <div style={{ background: C.bg, borderRadius: 6, height: 10 }}><div style={{ background: C.or, width: `${(100 * soma(l)) / max}%`, height: 10, borderRadius: 6 }} /></div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={S.card}>
+        <b>Por vendedor</b>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, marginTop: 6 }}>
+            <thead><tr style={{ color: C.mut, textAlign: "left" }}><th>Vendedor</th><th>Em aberto</th><th>Ganhos</th><th>Perdidos</th><th>Conv.</th></tr></thead>
+            <tbody>
+              {donos.map((id) => { const x = dados(negocios.filter((n) => n.owner === id)); return (
+                <tr key={id} style={{ borderTop: `1px solid ${C.line}` }}>
+                  <td style={{ padding: 6 }}>{nomeDe(vend, id)}</td>
+                  <td>{x.abertos.length} · {brl(soma(x.abertos))}</td><td>{x.ganhos.length} · {brl(soma(x.ganhos))}</td>
+                  <td>{x.perdidos.length}</td><td>{x.conv}%</td>
+                </tr>); })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {topMotivos.length > 0 && (
+        <div style={S.card}>
+          <b>Principais motivos de perda</b>
+          {topMotivos.map(([m, q]) => <div key={m} style={{ padding: "4px 0" }}>{q}× <span style={{ color: C.mut }}>{m}</span></div>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -193,10 +294,17 @@ function Perfil({ perfil, recarrega }) {
   );
 }
 
-function Negocios({ negocios, clientes, abrir, load }) {
+function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
   const [filtro, setFiltro] = useState("aberto");
   const [novo, setNovo] = useState(false);
-  const lista = negocios.filter((n) => filtro === "todos" || n.status === filtro);
+  const [busca, setBusca] = useState("");
+  const [vf, setVf] = useState("todos");
+  const [soParados, setSoParados] = useState(false);
+  const lista = negocios.filter((n) =>
+    (filtro === "todos" || n.status === filtro) &&
+    (vf === "todos" || n.owner === vf) &&
+    (!busca || `${n.titulo} ${n.clientes?.nome || ""}`.toLowerCase().includes(busca.toLowerCase())) &&
+    (!soParados || parado(n, pend)));
   const mover = async (n, etapa) => {
     if (!etapa || etapa === n.etapa) return;
     await sb.from("negocios").update({ etapa }).eq("id", n.id);
@@ -205,13 +313,22 @@ function Negocios({ negocios, clientes, abrir, load }) {
   };
   const card = (n) => {
     const i = ETAPAS.indexOf(n.etapa);
+    const inf = infoNeg(n, pend);
+    const p = parado(n, pend);
     return (
       <div key={n.id} draggable onDragStart={(e) => e.dataTransfer.setData("id", n.id)} onClick={() => abrir(n.id)}
-        style={{ ...S.card, marginBottom: 8, padding: 10, cursor: "pointer" }}>
-        <b>{n.titulo}</b>
+        style={{ ...S.card, marginBottom: 8, padding: 10, cursor: "pointer", background: p ? "#2a1a1c" : C.card, borderColor: p ? "#7a2d31" : C.line }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <b style={{ flex: 1 }}>{n.titulo}</b>
+          <span style={{ background: p ? "#d64545" : C.line, borderRadius: 6, padding: "1px 6px", fontSize: 11 }}>{inf.dias}d</span>
+        </div>
         <div style={{ color: C.mut, fontSize: 13 }}>{n.clientes?.nome}</div>
         <div style={{ color: C.or, fontWeight: 700, margin: "4px 0" }}>{brl(n.preco)}</div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 12, color: C.mut }}>
+          {nomeDe(vend, n.owner)}
+          {inf.atrasada ? <span style={{ color: "#ff8a8a" }}> · ⚠ atividade atrasada</span> : inf.semProx ? <span style={{ color: "#f5c542" }}> · ⚠ sem próxima atividade</span> : null}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
           <button style={S.ghost} disabled={i <= 0} onClick={(e) => { e.stopPropagation(); mover(n, ETAPAS[i - 1]); }}>‹</button>
           <button style={S.ghost} disabled={i >= ETAPAS.length - 1} onClick={(e) => { e.stopPropagation(); mover(n, ETAPAS[i + 1]); }}>›</button>
         </div>
@@ -221,7 +338,7 @@ function Negocios({ negocios, clientes, abrir, load }) {
   const filtros = [["aberto", "Em andamento"], ["ganho", "Ganhos"], ["perdido", "Perdidos"], ["todos", "Todos"]];
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
         <button style={S.btn} onClick={() => setNovo(true)}>+ Novo negócio</button>
         {filtros.map(([k, l]) => (
           <button key={k} style={{ ...S.ghost, borderColor: filtro === k ? C.or : C.line, color: filtro === k ? C.or : C.tx }} onClick={() => setFiltro(k)}>
@@ -229,8 +346,16 @@ function Negocios({ negocios, clientes, abrir, load }) {
           </button>
         ))}
       </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...S.in, width: 220, marginBottom: 0 }} placeholder="Buscar negócio ou cliente…" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        <select style={{ ...S.in, width: 190, marginBottom: 0 }} value={vf} onChange={(e) => setVf(e.target.value)}>
+          <option value="todos">Todos os vendedores</option>
+          {vend.map((x) => <option key={x.id} value={x.id}>{x.id === perfil.id ? "Meus negócios" : x.nome || x.email}</option>)}
+        </select>
+        <label style={{ fontSize: 14 }}><input type="checkbox" checked={soParados} onChange={(e) => setSoParados(e.target.checked)} /> Só parados</label>
+      </div>
       {filtro === "aberto" ? (
-        <div style={{ display: "grid", gridAutoFlow: "column", gridAutoColumns: "minmax(230px,1fr)", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
+        <div style={{ display: "grid", gridAutoFlow: "column", gridAutoColumns: "minmax(240px,1fr)", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
           {ETAPAS.map((et) => {
             const col = lista.filter((n) => n.etapa === et);
             return (
@@ -238,7 +363,7 @@ function Negocios({ negocios, clientes, abrir, load }) {
                 onDrop={(e) => { const n = negocios.find((x) => x.id === e.dataTransfer.getData("id")); if (n) mover(n, et); }}
                 style={{ background: "#191c21", borderRadius: 10, padding: 8, minHeight: 240 }}>
                 <div style={{ fontWeight: 700 }}>{et}</div>
-                <div style={{ color: C.mut, fontSize: 12, marginBottom: 8 }}>{col.length} · {brl(col.reduce((s, n) => s + Number(n.preco || 0), 0))}</div>
+                <div style={{ color: C.mut, fontSize: 12, marginBottom: 8 }}>{col.length} · {brl(soma(col))}</div>
                 {col.map(card)}
               </div>
             );
@@ -246,11 +371,11 @@ function Negocios({ negocios, clientes, abrir, load }) {
         </div>
       ) : (
         <div>
-          <div style={{ color: C.mut, marginBottom: 8 }}>Total: {brl(lista.reduce((s, n) => s + Number(n.preco || 0), 0))}</div>
+          <div style={{ color: C.mut, marginBottom: 8 }}>Total: {brl(soma(lista))}</div>
           {lista.map((n) => (
             <div key={n.id} style={{ ...S.card, cursor: "pointer", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }} onClick={() => abrir(n.id)}>
               <div style={{ flex: 1 }}>
-                <b>{n.titulo}</b> <span style={{ color: C.mut }}>{n.clientes?.nome}</span>
+                <b>{n.titulo}</b> <span style={{ color: C.mut }}>{n.clientes?.nome} · {nomeDe(vend, n.owner)}</span>
                 {n.motivo_perda && <div style={{ color: C.mut, fontSize: 13 }}>Motivo: {n.motivo_perda}</div>}
               </div>
               <span style={{ color: C.or, fontWeight: 700 }}>{brl(n.preco)}</span>
