@@ -143,6 +143,9 @@ const infoNeg = (n, pend) => {
 const parado = (n, pend) => n.status === "aberto" && (diasParado(n) >= 7 || infoNeg(n, pend).atrasada);
 const nomeDe = (vend, id) => { const v = vend.find((x) => x.id === id); return v ? v.nome || v.email?.split("@")[0] : "—"; };
 const soma = (l) => l.reduce((s, n) => s + Number(n.preco || 0), 0);
+const ORIGENS = ["Indicação", "Instagram", "Evento", "Igreja da rede", "Site", "WhatsApp", "Outro"];
+const PROB = { "Apresentação": 10, "Construir Proposta": 25, "Negociação": 50, "Fechamento": 75, "Contrato": 90 };
+const probEf = (n) => (n.probabilidade ?? PROB[n.etapa] ?? 0);
 const Kpi = ({ t, v, s, cor }) => (
   <div style={{ ...S.card, marginBottom: 0 }}>
     <div style={{ color: C.mut, fontSize: 12 }}>{t}</div>
@@ -212,6 +215,18 @@ function Painel({ negocios, vend, pend, perfil }) {
   const base = negocios.filter((n) => vf === "todos" || n.owner === vf);
   const d = dados(base);
   const parados = d.abertos.filter((n) => parado(n, pend));
+  const mesAtual = hojeStr().slice(0, 7);
+  const prevMes = d.abertos.filter((n) => n.data_prevista && n.data_prevista.slice(0, 7) === mesAtual);
+  const pond = (l) => l.reduce((s, n) => s + (Number(n.preco || 0) * probEf(n)) / 100, 0);
+  const origens = {};
+  base.forEach((n) => {
+    const o = n.origem || "Sem origem";
+    origens[o] = origens[o] || { t: 0, g: 0, p: 0, v: 0 };
+    origens[o].t++;
+    if (n.status === "ganho") { origens[o].g++; origens[o].v += Number(n.preco || 0); }
+    if (n.status === "perdido") origens[o].p++;
+  });
+  const listaOrig = Object.entries(origens).sort((a, b) => b[1].t - a[1].t);
   const atrasadas = pend.filter((x) => x.vencimento && x.vencimento < hojeStr()).length;
   const max = Math.max(1, ...ETAPAS.map((e) => soma(d.abertos.filter((n) => n.etapa === e))));
   const motivos = {};
@@ -235,6 +250,8 @@ function Painel({ negocios, vend, pend, perfil }) {
         <Kpi t="Perdidos no período" v={brl(soma(d.perdidos))} s={`${d.perdidos.length} negócios`} cor="#e5484d" />
         <Kpi t="Taxa de conversão" v={`${d.conv}%`} s="ganhos ÷ (ganhos + perdidos)" />
         <Kpi t="Ticket médio" v={brl(d.ganhos.length ? soma(d.ganhos) / d.ganhos.length : 0)} s="dos ganhos" />
+        <Kpi t="Previsto p/ fechar este mês" v={brl(soma(prevMes))} s={`${prevMes.length} negócios · ponderado ${brl(pond(prevMes))}`} />
+        <Kpi t="Receita ponderada (funil)" v={brl(pond(d.abertos))} s="valor × probabilidade" />
         <Kpi t="Negócios parados" v={parados.length} s="7+ dias sem movimento ou atividade atrasada" cor={parados.length ? "#e5484d" : C.tx} />
         <Kpi t="Atividades atrasadas" v={atrasadas} s={perfil.role === "admin" ? "de toda a equipe" : "suas"} cor={atrasadas ? "#e5484d" : C.tx} />
       </div>
@@ -262,6 +279,22 @@ function Painel({ negocios, vend, pend, perfil }) {
                   <td>{x.abertos.length} · {brl(soma(x.abertos))}</td><td>{x.ganhos.length} · {brl(soma(x.ganhos))}</td>
                   <td>{x.perdidos.length}</td><td>{x.conv}%</td>
                 </tr>); })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={S.card}>
+        <b>Origem dos leads</b>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, marginTop: 6 }}>
+            <thead><tr style={{ color: C.mut, textAlign: "left" }}><th>Origem</th><th>Negócios</th><th>Ganhos</th><th>Valor ganho</th><th>Conv.</th></tr></thead>
+            <tbody>
+              {listaOrig.map(([o, x]) => (
+                <tr key={o} style={{ borderTop: `1px solid ${C.line}` }}>
+                  <td style={{ padding: 6 }}>{o}</td><td>{x.t}</td><td>{x.g}</td><td>{brl(x.v)}</td>
+                  <td>{x.g + x.p ? Math.round((100 * x.g) / (x.g + x.p)) : 0}%</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -324,6 +357,7 @@ function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
         </div>
         <div style={{ color: C.mut, fontSize: 13 }}>{n.clientes?.nome}</div>
         <div style={{ color: C.or, fontWeight: 700, margin: "4px 0" }}>{brl(n.preco)}</div>
+        {n.data_prevista && <div style={{ fontSize: 12, color: n.data_prevista < hojeStr() ? "#ff8a8a" : C.mut }}>📅 {dataBR(n.data_prevista)} · {probEf(n)}%</div>}
         <div style={{ fontSize: 12, color: C.mut }}>
           {nomeDe(vend, n.owner)}
           {inf.atrasada ? <span style={{ color: "#ff8a8a" }}> · ⚠ atividade atrasada</span> : inf.semProx ? <span style={{ color: "#f5c542" }}> · ⚠ sem próxima atividade</span> : null}
@@ -392,12 +426,12 @@ function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
 }
 
 function NovoNegocio({ clientes, load, fechar }) {
-  const [f, setF] = useState({ cliente_id: "", novo: "", titulo: "", produto: PRODUTOS[0].nome, preco: PRODUTOS[0].preco });
+  const [f, setF] = useState({ cliente_id: "", novo: "", titulo: "", produto: PRODUTOS[0].nome, preco: PRODUTOS[0].preco, origem: "", data_prevista: "" });
   const salvar = async () => {
     let cid = f.cliente_id;
     if (!cid && f.novo.trim()) cid = (await sb.from("clientes").insert({ nome: f.novo.trim() }).select().single()).data?.id;
     if (!cid) return alert("Escolha um cliente ou digite o nome de um novo.");
-    const r = await sb.from("negocios").insert({ cliente_id: cid, titulo: f.titulo || f.produto, produto: f.produto, preco: f.preco, etapa: ETAPAS[0] }).select().single();
+    const r = await sb.from("negocios").insert({ cliente_id: cid, titulo: f.titulo || f.produto, produto: f.produto, preco: f.preco, etapa: ETAPAS[0], origem: f.origem || null, data_prevista: f.data_prevista || null }).select().single();
     if (r.error) return alert(r.error.message);
     await sb.from("historico").insert({ negocio_id: r.data.id, texto: "Negócio criado" });
     load(); fechar();
@@ -416,6 +450,13 @@ function NovoNegocio({ clientes, load, fechar }) {
           {PRODUTOS.map((p) => <option key={p.nome}>{p.nome}</option>)}
         </select>
         <input style={S.in} type="number" value={f.preco} onChange={(e) => setF({ ...f, preco: Number(e.target.value) })} />
+        <select style={S.in} value={f.origem} onChange={(e) => setF({ ...f, origem: e.target.value })}>
+          <option value="">Origem do lead…</option>
+          {ORIGENS.map((o) => <option key={o}>{o}</option>)}
+        </select>
+        <label style={{ color: C.mut, fontSize: 13 }}>Previsão de fechamento
+          <input style={S.in} type="date" value={f.data_prevista} onChange={(e) => setF({ ...f, data_prevista: e.target.value })} />
+        </label>
         <button style={S.btn} onClick={salvar}>Criar</button> <button style={S.ghost} onClick={fechar}>Cancelar</button>
       </div>
     </Modal>
@@ -437,6 +478,7 @@ function Negocio({ n, perfil, vend, load, fechar }) {
   };
   useEffect(() => { carrega(); }, [n.id]);
   const log = (texto) => sb.from("historico").insert({ negocio_id: n.id, texto });
+  const salva = async (v) => { await sb.from("negocios").update(v).eq("id", n.id); load(); };
   const encerrar = async (status) => {
     let motivo = null;
     if (status === "perdido") { motivo = window.prompt("Motivo da perda?"); if (motivo === null) return; }
@@ -474,6 +516,21 @@ function Negocio({ n, perfil, vend, load, fechar }) {
             <button style={{ ...S.btn, background: "#2ea34f" }} onClick={() => encerrar("ganho")}>✓ Ganho</button>
             <button style={{ ...S.btn, background: "#d64545" }} onClick={() => encerrar("perdido")}>✕ Perdido</button>
           </>) : <button style={S.ghost} onClick={reabrir}>Reabrir negócio</button>}
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center", color: C.mut, fontSize: 13 }}>
+          <label>Origem{" "}
+            <select style={{ ...S.in, width: 160, marginBottom: 0 }} value={n.origem || ""} onChange={(e) => salva({ origem: e.target.value || null })}>
+              <option value="">—</option>
+              {ORIGENS.map((o) => <option key={o}>{o}</option>)}
+            </select>
+          </label>
+          <label>Previsão de fechamento{" "}
+            <input key={n.data_prevista || "x"} style={{ ...S.in, width: 150, marginBottom: 0 }} type="date" defaultValue={n.data_prevista || ""} onChange={(e) => salva({ data_prevista: e.target.value || null })} />
+          </label>
+          <label>Probabilidade %{" "}
+            <input key={n.probabilidade ?? "auto"} style={{ ...S.in, width: 90, marginBottom: 0 }} type="number" min="0" max="100" placeholder={String(PROB[n.etapa] ?? "")} defaultValue={n.probabilidade ?? ""}
+              onBlur={(e) => salva({ probabilidade: e.target.value === "" ? null : Math.min(100, Math.max(0, Number(e.target.value))) })} />
+          </label>
         </div>
         {perfil.role === "admin" && (
           <label style={{ display: "block", marginTop: 10, color: C.mut, fontSize: 13 }}>Responsável{" "}
@@ -718,12 +775,47 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
     const a = document.createElement("a");
     a.href = cv.toDataURL("image/png"); a.download = `Proposta-CabinCraft-${c.nome}.png`; a.click();
   };
-  const pdf = async () => {
+  const nomeArq = `Proposta-CabinCraft-${c.nome}.pdf`;
+  const gerarPdf = async () => {
     const cv = await canvas();
     const w = 210, h = (cv.height * w) / cv.width;
     const d = new jsPDF({ unit: "mm", format: [w, Math.max(h, 297)] });
     d.addImage(cv.toDataURL("image/png"), "PNG", 0, 0, w, h);
-    d.save(`Proposta-CabinCraft-${c.nome}.pdf`);
+    return d;
+  };
+  const pdf = async () => (await gerarPdf()).save(nomeArq);
+  const [contatos, setContatos] = useState([]);
+  const [tel, setTel] = useState("");
+  useEffect(() => {
+    sb.from("contatos").select("nome, cargo, telefone").eq("cliente_id", c.id).then(({ data }) => {
+      const l = (data || []).filter((x) => x.telefone);
+      setContatos(l); if (l[0]) setTel(l[0].telefone);
+    });
+  }, []);
+  const enviarWhats = async () => {
+    const digitos = tel.replace(/\D/g, "");
+    if (digitos.length < 10) return alert("Informe o telefone do contato (com DDD).");
+    await salvar();
+    const contato = contatos.find((x) => x.telefone === tel);
+    const primeiro = contato?.nome?.split(" ")[0];
+    const linhas = [
+      `Olá${primeiro ? ", " + primeiro : ""}! Segue a proposta da CabinCraft para ${c.igreja || c.nome}:`,
+      "", `*${p.produto}*`, `Total: ${brl(total)}`,
+      Number(p.entrada) > 0 || p.parcelas > 1 ? `Entrada de ${brl(p.entrada || 0)} + saldo em ${p.parcelas}x de ${brl(parc)}` : null,
+      `Prazo: ${p.prazo}`, "", "Qualquer dúvida, estou à disposição!", perfil.nome || "",
+    ].filter((x) => x !== null);
+    const texto = linhas.join("\n");
+    const d = await gerarPdf();
+    const arq = new File([d.output("blob")], nomeArq, { type: "application/pdf" });
+    const registra = () => negocioId && sb.from("historico").insert({ negocio_id: negocioId, texto: "Proposta enviada por WhatsApp" });
+    if (navigator.canShare?.({ files: [arq] })) {
+      try { await navigator.share({ files: [arq], text: texto }); registra(); return; }
+      catch (e) { if (e.name === "AbortError") return; }
+    }
+    d.save(nomeArq);
+    window.open(`https://wa.me/${digitos.startsWith("55") ? digitos : "55" + digitos}?text=${encodeURIComponent(texto)}`, "_blank");
+    registra();
+    alert("PDF baixado. No WhatsApp, anexe o arquivo à conversa que abriu.");
   };
 
   return (
@@ -741,6 +833,15 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
           </div>
           <label>Prazo<input style={S.in} value={p.prazo} onChange={set("prazo")} /></label>
           <label>Observações (cor do carpete, frete, etc.)<textarea style={{ ...S.in, height: 60 }} value={p.obs || ""} onChange={set("obs")} /></label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "4px 0 12px", alignItems: "center" }}>
+            {contatos.length > 0 && (
+              <select style={{ ...S.in, width: 240, marginBottom: 0 }} value={tel} onChange={(e) => setTel(e.target.value)}>
+                {contatos.map((x, i) => <option key={i} value={x.telefone}>{x.nome}{x.cargo ? ` (${x.cargo})` : ""}</option>)}
+              </select>
+            )}
+            <input style={{ ...S.in, width: 190, marginBottom: 0 }} placeholder="WhatsApp do contato" value={tel} onChange={(e) => setTel(e.target.value)} />
+            <button style={{ ...S.btn, background: "#2ea34f" }} onClick={enviarWhats}>Enviar pelo WhatsApp</button>
+          </div>
           <button style={S.btn} onClick={salvar}>Salvar</button>{" "}
           <button style={S.btn} onClick={pdf}>Baixar PDF</button>{" "}
           <button style={S.btn} onClick={png}>Baixar imagem</button>{" "}
