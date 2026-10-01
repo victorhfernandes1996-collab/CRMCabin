@@ -1431,7 +1431,10 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
       }
     }
   };
-  const canvas = () => html2canvas(ref.current, { scale: 2, backgroundColor: "#ffffff" });
+  const canvas = () => html2canvas(ref.current, {
+    scale: 2, backgroundColor: "#ffffff", width: 794, windowWidth: 794,
+    onclone: (d) => { const el = d.getElementById("doc-capture"); if (el?.parentElement) { el.parentElement.style.position = "static"; el.parentElement.style.left = "0"; } },
+  });
   const png = async () => {
     const cv = await canvas();
     const a = document.createElement("a");
@@ -1480,6 +1483,48 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
     alert("PDF baixado. No WhatsApp, anexe o arquivo à conversa que abriu.");
   };
 
+  // Documento com largura fixa (A4 ~794px): sai igual no celular e no computador
+  const renderDoc = (r) => (
+    <div ref={r} id={r ? "doc-capture" : undefined} style={{ width: 794, boxSizing: "border-box", background: "#fff", color: "#222", padding: 48, fontFamily: "Georgia,serif" }}>
+          <div style={{ borderBottom: `4px solid ${C.or}`, paddingBottom: 12, marginBottom: 24 }}>
+            <div style={{ fontSize: 30, fontWeight: 800, color: C.or }}>CabinCraft</div>
+            <div style={{ color: "#666" }}>Cabines acústicas artesanais para igrejas e ministérios</div>
+          </div>
+          <h2 style={{ margin: "0 0 4px" }}>Proposta Comercial</h2>
+          <p style={{ color: "#666", marginTop: 0 }}>
+            Emitida em {new Date().toLocaleDateString("pt-BR")} · Para: <b>{c.nome}</b>{c.igreja && ` — ${c.igreja}`}
+          </p>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", margin: "20px 0" }}>
+            <colgroup><col style={{ width: "26%" }} /><col /><col style={{ width: "24%" }} /></colgroup>
+            <thead><tr style={{ background: "#f4f1ec", textAlign: "left" }}>
+              <th style={{ padding: 10 }}>Modelo</th><th style={{ padding: 10 }}>Descrição</th><th style={{ padding: 10, textAlign: "right" }}>Valor</th>
+            </tr></thead>
+            <tbody><tr>
+              <td style={{ padding: 10, borderBottom: "1px solid #ddd" }}>{p.produto}</td>
+              <td style={{ padding: 10, borderBottom: "1px solid #ddd" }}>{desc}</td>
+              <td style={{ padding: 10, borderBottom: "1px solid #ddd", textAlign: "right", whiteSpace: "nowrap" }}>{brl(p.preco)}</td>
+            </tr></tbody>
+          </table>
+          <div style={{ textAlign: "right", lineHeight: 1.8 }}>
+            {Number(p.desconto) > 0 && <div>Desconto: −{brl(p.desconto)}</div>}
+            <div style={{ fontSize: 22, fontWeight: 800, color: C.or }}>Total: {brl(total)}</div>
+            {Number(p.entrada) > 0 && <div>Entrada: {brl(p.entrada)}</div>}
+            {p.parcelas > 1 || Number(p.entrada) > 0 ? <div>Saldo em {p.parcelas}x de {brl(parc)}</div> : null}
+          </div>
+          <h4 style={{ marginBottom: 6 }}>Inclui</h4>
+          <div style={{ fontSize: 14, color: "#444" }}>
+            Madeirite naval plastificado, Pinus tratado, feltro acústico 10mm, lã de rocha 32kg/m³, revestimento em carpete, ventilação silenciosa embutida,
+            2 passagens de cabo e iluminação LED. Personalização de cores e piso sob consulta.
+          </div>
+          <h4 style={{ marginBottom: 6 }}>Prazos e entrega</h4>
+          <div style={{ fontSize: 14, color: "#444" }}>Produção: {p.prazo}. Frete a combinar. Instalação pela equipe técnica.</div>
+          <div style={{ fontSize: 14, color: "#444", marginTop: 6 }}><b>Proposta válida até {dataBR(validaAte)}.</b></div>
+          {p.obs && <><h4 style={{ marginBottom: 6 }}>Observações</h4><div style={{ fontSize: 14, color: "#444", whiteSpace: "pre-wrap" }}>{p.obs}</div></>}
+          <div style={{ marginTop: 30, fontSize: 13, color: "#666", borderTop: "1px solid #ddd", paddingTop: 10 }}>
+            {perfil.nome}{perfil.whatsapp && ` · WhatsApp ${perfil.whatsapp}`} · Instagram @cabincraftbr
+          </div>
+    </div>
+  );
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000c", overflow: "auto", padding: 16, zIndex: 10 }}>
       <div style={{ maxWidth: 860, margin: "0 auto" }}>
@@ -1514,45 +1559,8 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
           <button style={S.ghost} onClick={fechar}>Fechar</button>
         </div>
 
-        {/* Área que vira PDF/imagem */}
-        <div ref={ref} style={{ background: "#fff", color: "#222", padding: 40, fontFamily: "Georgia,serif" }}>
-          <div style={{ borderBottom: `4px solid ${C.or}`, paddingBottom: 12, marginBottom: 24 }}>
-            <div style={{ fontSize: 30, fontWeight: 800, color: C.or }}>CabinCraft</div>
-            <div style={{ color: "#666" }}>Cabines acústicas artesanais para igrejas e ministérios</div>
-          </div>
-          <h2 style={{ margin: "0 0 4px" }}>Proposta Comercial</h2>
-          <p style={{ color: "#666", marginTop: 0 }}>
-            Emitida em {new Date().toLocaleDateString("pt-BR")} · Para: <b>{c.nome}</b>{c.igreja && ` — ${c.igreja}`}
-          </p>
-          <table style={{ width: "100%", borderCollapse: "collapse", margin: "20px 0" }}>
-            <thead><tr style={{ background: "#f4f1ec", textAlign: "left" }}>
-              <th style={{ padding: 10 }}>Modelo</th><th style={{ padding: 10 }}>Descrição</th><th style={{ padding: 10, textAlign: "right" }}>Valor</th>
-            </tr></thead>
-            <tbody><tr>
-              <td style={{ padding: 10, borderBottom: "1px solid #ddd" }}>{p.produto}</td>
-              <td style={{ padding: 10, borderBottom: "1px solid #ddd" }}>{desc}</td>
-              <td style={{ padding: 10, borderBottom: "1px solid #ddd", textAlign: "right" }}>{brl(p.preco)}</td>
-            </tr></tbody>
-          </table>
-          <div style={{ textAlign: "right", lineHeight: 1.8 }}>
-            {Number(p.desconto) > 0 && <div>Desconto: −{brl(p.desconto)}</div>}
-            <div style={{ fontSize: 22, fontWeight: 800, color: C.or }}>Total: {brl(total)}</div>
-            {Number(p.entrada) > 0 && <div>Entrada: {brl(p.entrada)}</div>}
-            {p.parcelas > 1 || Number(p.entrada) > 0 ? <div>Saldo em {p.parcelas}x de {brl(parc)}</div> : null}
-          </div>
-          <h4 style={{ marginBottom: 6 }}>Inclui</h4>
-          <div style={{ fontSize: 14, color: "#444" }}>
-            Madeirite naval plastificado, Pinus tratado, feltro acústico 10mm, lã de rocha 32kg/m³, revestimento em carpete, ventilação silenciosa embutida,
-            2 passagens de cabo e iluminação LED. Personalização de cores e piso sob consulta.
-          </div>
-          <h4 style={{ marginBottom: 6 }}>Prazos e entrega</h4>
-          <div style={{ fontSize: 14, color: "#444" }}>Produção: {p.prazo}. Frete a combinar. Instalação pela equipe técnica.</div>
-          <div style={{ fontSize: 14, color: "#444", marginTop: 6 }}><b>Proposta válida até {dataBR(validaAte)}.</b></div>
-          {p.obs && <><h4 style={{ marginBottom: 6 }}>Observações</h4><div style={{ fontSize: 14, color: "#444", whiteSpace: "pre-wrap" }}>{p.obs}</div></>}
-          <div style={{ marginTop: 30, fontSize: 13, color: "#666", borderTop: "1px solid #ddd", paddingTop: 10 }}>
-            {perfil.nome}{perfil.whatsapp && ` · WhatsApp ${perfil.whatsapp}`} · Instagram @cabincraftbr
-          </div>
-        </div>
+        <div style={{ zoom: Math.min(1, (window.innerWidth - 32) / 794) }}>{renderDoc(null)}</div>
+        <div aria-hidden="true" style={{ position: "fixed", left: -10000, top: 0, pointerEvents: "none" }}>{renderDoc(ref)}</div>
       </div>
     </div>
   );
