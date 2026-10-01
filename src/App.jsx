@@ -163,11 +163,11 @@ const Kpi = ({ t, v, s, cor }) => (
   </div>
 );
 
-const MENU = [["painel", "📊", "Painel"], ["negocios", "💼", "Negócios"], ["clientes", "👥", "Clientes"], ["atividades", "✅", "Atividades"]];
+const MENU = [["meudia", "🌅", "Meu dia"], ["painel", "📊", "Painel"], ["negocios", "💼", "Negócios"], ["clientes", "👥", "Clientes"], ["atividades", "✅", "Atividades"]];
 const mesISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; };
 
 function Crm({ perfil, recarrega }) {
-  const [aba, setAba] = useState("painel");
+  const [aba, setAba] = useState("meudia");
   const [clientes, setClientes] = useState([]);
   const [negocios, setNegocios] = useState([]);
   const [vend, setVend] = useState([]);
@@ -176,6 +176,9 @@ function Crm({ perfil, recarrega }) {
   const [produtos, setProdutos] = useState(PRODUTOS_PADRAO);
   const [aprov, setAprov] = useState([]);
   const [cliQ, setCliQ] = useState("");
+  const [modelos, setModelos] = useState([]);
+  const [vencendo, setVencendo] = useState([]);
+  const [install, setInstall] = useState(null);
   const [aberto, setAberto] = useState(null);
   const [v, setV] = useState(0);
   const [aberta, setAberta] = useState(() => {
@@ -194,11 +197,23 @@ function Crm({ perfil, recarrega }) {
     setMetas((await sb.from("metas").select("*").eq("mes", mesISO())).data || []);
     const pr = await sb.from("produtos").select("*").eq("ativo", true).order("nome");
     if (pr.data?.length) setProdutos(pr.data);
-    if (perfil.role === "admin") setAprov((await sb.from("propostas").select("*, negocios(id, titulo, owner, clientes(nome))").eq("status_aprov", "pendente").order("created_at")).data || []);
+    const md = await sb.from("modelos_msg").select("*").eq("ativo", true).order("ordem");
+    setModelos(md.data || []);
+    const rv = await sb.from("propostas").select("id, negocio_id, produto, valida_ate, created_at, negocios(id, titulo, owner, status, etapa, clientes(nome))").not("valida_ate", "is", null);
+    const ult = {};
+    (rv.data || []).forEach((x) => { if (x.negocio_id && (!ult[x.negocio_id] || x.created_at > ult[x.negocio_id].created_at)) ult[x.negocio_id] = x; });
+    const lim = addDias(hojeStr(), 3);
+    setVencendo(Object.values(ult).filter((x) => x.negocios?.status === "aberto" && x.valida_ate <= lim));
+    setAprov((await sb.from("propostas").select("*, negocios(id, titulo, owner, clientes(nome))").eq("status_aprov", "pendente").order("created_at")).data || []);
   };
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    const h = (e) => { e.preventDefault(); setInstall(e); };
+    window.addEventListener("beforeinstallprompt", h);
+    return () => window.removeEventListener("beforeinstallprompt", h);
+  }, []);
   const admin = perfil.role === "admin";
-  const itens = [...MENU, ...(admin ? [["aprovacoes", "🔔", "Aprovações"], ["admin", "🔑", "Usuários"], ["produtos", "📦", "Produtos"]] : []), ["perfil", "👤", "Meu perfil"]];
+  const itens = [...MENU, ...(admin ? [["aprovacoes", "🔔", "Aprovações"], ["admin", "🔑", "Usuários"], ["produtos", "📦", "Produtos"], ["modelos", "📝", "Mensagens"]] : []), ["perfil", "👤", "Meu perfil"]];
   const atras = pend.filter((x) => x.vencimento && x.vencimento < hojeStr()).length;
   const neg = negocios.find((n) => n.id === aberto);
   const badgeDe = (k) => (k === "atividades" ? atras : k === "aprovacoes" ? aprov.length : 0);
@@ -222,6 +237,7 @@ function Crm({ perfil, recarrega }) {
           ))}
           <div style={{ flex: 1 }} />
           {aberta && <div style={{ color: C.mut, fontSize: 12, padding: "4px 8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{perfil.nome || perfil.email}</div>}
+          {install && <button title="Instalar app" style={{ ...S.ghost, width: "100%", marginBottom: 6, color: C.or }} onClick={async () => { install.prompt(); await install.userChoice; setInstall(null); }}>{aberta ? "📲 Instalar app" : "📲"}</button>}
           <button title="Sair" style={{ ...S.ghost, width: "100%" }} onClick={() => sb.auth.signOut()}>{aberta ? "Sair" : "⎋"}</button>
         </aside>
         <main style={{ flex: 1, minWidth: 0, padding: 16 }}>
@@ -231,6 +247,7 @@ function Crm({ perfil, recarrega }) {
               Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
             </div>
           )}
+          {aba === "meudia" && <MeuDia perfil={perfil} negocios={negocios} pend={pend} aprov={aprov} vencendo={vencendo} metas={metas} vend={vend} abrir={setAberto} ir={setAba} load={load} />}
           {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} metas={metas} load={load} />}
           {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
           {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} perfil={perfil} abrir={setAberto} load={load} q={cliQ} setQ={setCliQ} />}
@@ -238,9 +255,10 @@ function Crm({ perfil, recarrega }) {
           {aba === "admin" && <Admin />}
           {aba === "aprovacoes" && <Aprovacoes itens={aprov} vend={vend} load={load} />}
           {aba === "produtos" && <Produtos recarrega={load} />}
+          {aba === "modelos" && <Modelos recarrega={load} />}
           {aba === "perfil" && <Perfil perfil={perfil} recarrega={recarrega} />}
         </main>
-        {neg && <Negocio n={neg} perfil={perfil} vend={vend} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
+        {neg && <Negocio n={neg} perfil={perfil} vend={vend} modelos={modelos} load={load} fechar={() => { setAberto(null); setV(v + 1); load(); }} />}
       </div>
     </ProdutosCtx.Provider>
   );
@@ -353,9 +371,13 @@ function Aprovacoes({ itens, vend, load }) {
   const decidir = async (p, status) => {
     let obs = null;
     if (status === "recusada") { obs = window.prompt("Motivo da recusa (o vendedor vai ver):"); if (obs === null) return; }
-    const r = await sb.from("propostas").update({ status_aprov: status, obs_aprov: obs }).eq("id", p.id);
+    const ate = addDias(hojeStr(), Number(p.validade_dias || 15));
+    const r = await sb.from("propostas").update({ status_aprov: status, obs_aprov: obs, ...(status === "aprovada" ? { valida_ate: ate } : {}) }).eq("id", p.id);
     if (r.error) return alert(r.error.message);
-    if (status === "aprovada" && p.negocio_id) await sb.from("negocios").update({ preco: p.preco - p.desconto, produto: p.produto }).eq("id", p.negocio_id);
+    if (status === "aprovada" && p.negocio_id) {
+      await sb.from("negocios").update({ preco: p.preco - p.desconto, produto: p.produto }).eq("id", p.negocio_id);
+      await agendaFollowups(p.negocio_id, ate);
+    }
     if (p.negocio_id) await sb.from("historico").insert({ negocio_id: p.negocio_id, texto: status === "aprovada" ? `Desconto de ${p.desconto_pct}% APROVADO` : `Desconto de ${p.desconto_pct}% RECUSADO${obs ? ": " + obs : ""}` });
     load();
   };
@@ -440,6 +462,209 @@ function BuscaGlobal({ clientes, negocios, abrir, irCliente }) {
           {!ns.length && !cs.length && !cts.length && <div style={{ padding: 12, color: C.mut, fontSize: 14 }}>Nada encontrado.</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+const addDias = (d, n) => { const x = new Date(d + "T12:00"); x.setDate(x.getDate() + n); return x.toLocaleDateString("sv-SE"); };
+
+const preencher = (txt, v) => {
+  let t = txt || "";
+  if (!v.validade) t = t.split("\n").filter((l) => !l.includes("{validade}")).join("\n");
+  if (!v.contato) t = t.replace(/,?\s*\{contato\}/g, "");
+  return t.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
+};
+
+// Cria/atualiza as atividades automáticas ligadas à validade da proposta
+async function agendaFollowups(negocioId, validaAte) {
+  if (!negocioId || !validaAte) return;
+  const { data: neg } = await sb.from("negocios").select("owner, cliente_id").eq("id", negocioId).single();
+  if (!neg) return;
+  await sb.from("tarefas").delete().eq("negocio_id", negocioId).eq("feita", false)
+    .or("titulo.ilike.Follow-up da proposta%,titulo.ilike.Proposta vence hoje%");
+  const base = { negocio_id: negocioId, cliente_id: neg.cliente_id, owner: neg.owner };
+  const hoje = hojeStr();
+  const tentativa = addDias(validaAte, -3);
+  const fu = tentativa > addDias(hoje, 1) ? tentativa : addDias(hoje, 1);
+  const lista = [];
+  if (fu < validaAte) lista.push({ ...base, tipo: "whatsapp", titulo: `Follow-up da proposta (válida até ${dataBR(validaAte)})`, vencimento: fu });
+  lista.push({ ...base, tipo: "tarefa", titulo: "Proposta vence hoje: renovar ou fechar", vencimento: validaAte });
+  await sb.from("tarefas").insert(lista);
+}
+
+function MeuDia({ perfil, negocios, pend, aprov, vencendo, metas, vend, abrir, ir, load }) {
+  const [t, setT] = useState([]);
+  const h = hojeStr();
+  const carrega = async () => setT((await sb.from("tarefas").select("*, clientes(nome), negocios(id, titulo)")
+    .eq("feita", false).eq("owner", perfil.id).lte("vencimento", h).order("vencimento").order("hora")).data || []);
+  useEffect(() => { carrega(); }, []);
+  const concluir = async (x) => { await sb.from("tarefas").update({ feita: true }).eq("id", x.id); carrega(); load(); };
+  const admin = perfil.role === "admin";
+  const meus = negocios.filter((n) => n.owner === perfil.id && n.status === "aberto");
+  const atrasadas = t.filter((x) => x.vencimento < h);
+  const hoje = t.filter((x) => x.vencimento === h);
+  const parados = meus.filter((n) => parado(n, pend));
+  const ids = new Set(parados.map((n) => n.id));
+  const semProx = meus.filter((n) => !ids.has(n.id) && !pend.some((x) => x.negocio_id === n.id && (!x.vencimento || x.vencimento >= h)));
+  const venc = vencendo.filter((x) => x.negocios?.owner === perfil.id);
+  const minhasAprov = admin ? [] : aprov.filter((x) => x.negocios?.owner === perfil.id);
+  const hora = new Date().getHours();
+  const saud = hora < 12 ? "Bom dia" : hora < 18 ? "Boa tarde" : "Boa noite";
+  const primeiro = (perfil.nome || "").split(" ")[0];
+  const vazio = ![atrasadas, hoje, venc, parados, semProx, minhasAprov].some((l) => l.length) && !(admin && aprov.length);
+  const secao = (titulo, cor, n, filhos) => (n > 0 ? <div style={S.card}><b style={{ color: cor }}>{titulo} ({n})</b>{filhos}</div> : null);
+  const tarefa = (x, cor) => (
+    <div key={x.id} style={{ display: "flex", gap: 8, padding: "6px 0", alignItems: "center" }}>
+      <input type="checkbox" onChange={() => concluir(x)} />
+      <span style={{ flex: 1 }}>
+        {icone(x.tipo)} {x.titulo}
+        {x.negocios && <span style={{ color: C.or, cursor: "pointer" }} onClick={() => abrir(x.negocios.id)}> · {x.negocios.titulo}</span>}
+        {x.clientes && <span style={{ color: C.mut }}> · {x.clientes.nome}</span>}
+      </span>
+      <small style={{ color: cor }}>{dataBR(x.vencimento)}{horaFmt(x)}</small>
+    </div>
+  );
+  const linhaNeg = (n, extra) => (
+    <div key={n.id} style={{ display: "flex", gap: 8, padding: "6px 0", cursor: "pointer" }} onClick={() => abrir(n.id)}>
+      <span style={{ flex: 1 }}><b>{n.titulo}</b> <span style={{ color: C.mut }}>{n.clientes?.nome}</span></span>
+      <span style={{ color: C.mut, fontSize: 13 }}>{extra}</span>
+    </div>
+  );
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 2px" }}>{saud}{primeiro ? `, ${primeiro}` : ""}!</h2>
+      <div style={{ color: C.mut, marginBottom: 14, textTransform: "capitalize" }}>{new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}</div>
+      {vazio && <div style={S.card}>Tudo em dia por aqui. 🎉 Que tal prospectar um novo cliente?</div>}
+      {admin && aprov.length > 0 && (
+        <div style={{ ...S.card, borderColor: C.or }}>
+          <b style={{ color: C.or }}>Aprovações de desconto pendentes ({aprov.length})</b>
+          {aprov.slice(0, 5).map((p) => (
+            <div key={p.id} style={{ padding: "4px 0", fontSize: 14 }}>
+              {p.negocios?.titulo} <span style={{ color: C.mut }}>· {nomeDe(vend, p.negocios?.owner)} · desconto {p.desconto_pct}%</span>
+            </div>
+          ))}
+          <button style={{ ...S.btn, marginTop: 6 }} onClick={() => ir("aprovacoes")}>Revisar aprovações</button>
+        </div>
+      )}
+      {secao("Atividades atrasadas", "#e5484d", atrasadas.length, atrasadas.map((x) => tarefa(x, "#e5484d")))}
+      {secao("Para hoje", C.or, hoje.length, hoje.map((x) => tarefa(x, C.or)))}
+      {secao("Propostas vencendo ou vencidas", "#e5484d", venc.length, venc.map((x) => linhaNeg(x.negocios && { ...x.negocios, clientes: x.negocios.clientes },
+        x.valida_ate < h ? `venceu em ${dataBR(x.valida_ate)}` : x.valida_ate === h ? "vence hoje" : `vence em ${dataBR(x.valida_ate)}`)))}
+      {secao("Aguardando aprovação do admin", "#f5c542", minhasAprov.length, minhasAprov.map((p) => linhaNeg({ ...p.negocios, id: p.negocios?.id }, `desconto ${p.desconto_pct}%`)))}
+      {secao("Negócios parados", "#e5484d", parados.length, parados.slice(0, 8).map((n) => linhaNeg(n, `${diasParado(n)}d sem movimento`)))}
+      {secao("Sem próximo passo agendado", "#f5c542", semProx.length, semProx.slice(0, 8).map((n) => linhaNeg(n, n.etapa)))}
+      <MetasCard negocios={negocios} vend={vend} metas={metas} perfil={perfil} reload={load} />
+    </div>
+  );
+}
+
+function MensagemPronta({ n, c, perfil, modelos, validade }) {
+  const [contatos, setContatos] = useState([]);
+  const [mid, setMid] = useState("");
+  const [cid, setCid] = useState("");
+  const [tel, setTel] = useState("");
+  const [texto, setTexto] = useState("");
+  useEffect(() => {
+    sb.from("contatos").select("nome, cargo, telefone").eq("cliente_id", n.cliente_id).then(({ data }) => {
+      const l = (data || []).filter((x) => x.telefone);
+      setContatos(l);
+      if (l[0]) { setCid("0"); setTel(l[0].telefone); }
+    });
+  }, [n.cliente_id]);
+  const lista = [...modelos.filter((m) => m.etapa === n.etapa), ...modelos.filter((m) => !m.etapa), ...modelos.filter((m) => m.etapa && m.etapa !== n.etapa)];
+  useEffect(() => { if (!lista.some((m) => m.id === mid) && lista[0]) setMid(lista[0].id); }, [modelos, n.etapa]);
+  const contato = cid !== "" ? contatos[Number(cid)] : null;
+  useEffect(() => {
+    const m = modelos.find((x) => x.id === mid);
+    if (!m) return;
+    setTexto(preencher(m.texto, {
+      contato: contato?.nome?.split(" ")[0] || "", cliente: c.nome || "", igreja: c.igreja || c.nome || "",
+      produto: n.produto || "cabine", valor: brl(n.preco), vendedor: perfil.nome || "", validade,
+    }));
+  }, [mid, cid, n.etapa, n.preco, n.produto, validade, contatos.length]);
+  const abrirWhats = async () => {
+    const d = tel.replace(/\D/g, "");
+    if (d.length < 10) return alert("Informe o telefone do contato (com DDD).");
+    window.open(`https://wa.me/${d.startsWith("55") ? d : "55" + d}?text=${encodeURIComponent(texto)}`, "_blank");
+    const m = modelos.find((x) => x.id === mid);
+    await sb.from("historico").insert({ negocio_id: n.id, texto: `Mensagem aberta no WhatsApp${m ? `: ${m.nome}` : ""}` });
+  };
+  const copiar = async () => { try { await navigator.clipboard.writeText(texto); } catch (e) { alert("Não foi possível copiar."); } };
+  const w = { ...S.in, marginBottom: 0 };
+  if (!modelos.length) return null;
+  return (
+    <div style={S.card}>
+      <b>Mensagens prontas</b>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+        <select style={{ ...w, width: 230 }} value={mid} onChange={(e) => setMid(e.target.value)}>
+          {lista.map((m) => <option key={m.id} value={m.id}>{m.nome}{m.etapa ? ` · ${m.etapa}` : ""}</option>)}
+        </select>
+        {contatos.length > 0 && (
+          <select style={{ ...w, width: 220 }} value={cid} onChange={(e) => { setCid(e.target.value); setTel(contatos[Number(e.target.value)]?.telefone || ""); }}>
+            {contatos.map((x, i) => <option key={i} value={i}>{x.nome}{x.cargo ? ` (${x.cargo})` : ""}</option>)}
+          </select>
+        )}
+        <input style={{ ...w, width: 180 }} placeholder="WhatsApp do contato" value={tel} onChange={(e) => setTel(e.target.value)} />
+      </div>
+      <textarea style={{ ...S.in, height: 120 }} value={texto} onChange={(e) => setTexto(e.target.value)} />
+      <button style={{ ...S.btn, background: "#2ea34f" }} onClick={abrirWhats}>Abrir no WhatsApp</button> <button style={S.ghost} onClick={copiar}>Copiar texto</button>
+    </div>
+  );
+}
+
+function Modelos({ recarrega }) {
+  const [l, setL] = useState([]);
+  const [f, setF] = useState({ nome: "", etapa: "", texto: "" });
+  const load = async () => setL((await sb.from("modelos_msg").select("*").order("ordem").order("created_at")).data || []);
+  useEffect(() => { load(); }, []);
+  const upd = async (id, v) => {
+    const r = await sb.from("modelos_msg").update(v).eq("id", id);
+    if (r.error) alert(r.error.message);
+    load(); recarrega();
+  };
+  const add = async () => {
+    if (!f.nome.trim() || !f.texto.trim()) return alert("Informe o nome e o texto.");
+    const r = await sb.from("modelos_msg").insert({ nome: f.nome.trim(), etapa: f.etapa || null, texto: f.texto, ordem: l.length + 1 });
+    if (r.error) return alert(r.error.message);
+    setF({ nome: "", etapa: "", texto: "" }); load(); recarrega();
+  };
+  const del = async (m) => {
+    if (!window.confirm(`Excluir o modelo “${m.nome}”?`)) return;
+    await sb.from("modelos_msg").delete().eq("id", m.id); load(); recarrega();
+  };
+  const w = { ...S.in, marginBottom: 0 };
+  const etapaSel = (val, on) => (
+    <select style={{ ...w, width: 190 }} value={val || ""} onChange={(e) => on(e.target.value)}>
+      <option value="">Qualquer etapa</option>
+      {ETAPAS.map((e) => <option key={e}>{e}</option>)}
+    </select>
+  );
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>Modelos de mensagem</h3>
+      <div style={{ color: C.mut, fontSize: 13, marginBottom: 10 }}>
+        Variáveis: {"{contato}"} {"{cliente}"} {"{igreja}"} {"{produto}"} {"{valor}"} {"{vendedor}"} {"{validade}"}. A linha que tiver {"{validade}"} some se a proposta ainda não tiver validade.
+      </div>
+      {l.map((m) => (
+        <div key={m.id} style={{ ...S.card, opacity: m.ativo ? 1 : 0.55 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+            <input style={{ ...w, flex: 1, minWidth: 160 }} defaultValue={m.nome} onBlur={(e) => e.target.value !== m.nome && upd(m.id, { nome: e.target.value })} />
+            {etapaSel(m.etapa, (v) => upd(m.id, { etapa: v || null }))}
+            <label style={{ fontSize: 14 }}><input type="checkbox" checked={m.ativo} onChange={(e) => upd(m.id, { ativo: e.target.checked })} /> Ativo</label>
+            <button style={{ ...S.ghost, color: "#ff8a8a" }} onClick={() => del(m)}>Excluir</button>
+          </div>
+          <textarea style={{ ...S.in, height: 90, marginBottom: 0 }} defaultValue={m.texto} onBlur={(e) => e.target.value !== m.texto && upd(m.id, { texto: e.target.value })} />
+        </div>
+      ))}
+      <div style={S.card}>
+        <b>Novo modelo</b>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+          <input style={{ ...w, flex: 1, minWidth: 160 }} placeholder="Nome do modelo" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
+          {etapaSel(f.etapa, (v) => setF({ ...f, etapa: v }))}
+        </div>
+        <textarea style={{ ...S.in, height: 90 }} placeholder="Texto da mensagem…" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={S.btn} onClick={add}>Adicionar</button>
+      </div>
     </div>
   );
 }
@@ -633,6 +858,7 @@ function Perfil({ perfil, recarrega }) {
       <input style={{ ...S.in, marginTop: 8 }} placeholder="Nome" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
       <input style={S.in} placeholder="Seu WhatsApp, ex.: (19) 99999-9999" value={f.whatsapp} onChange={(e) => setF({ ...f, whatsapp: e.target.value })} />
       <button style={S.btn} onClick={salvar}>Salvar</button> {ok && <span style={{ color: C.mut }}>Salvo!</span>}
+      <p style={{ color: C.mut, fontSize: 13, marginBottom: 0 }}>📲 Para instalar no celular: no Android, use “Instalar app” no menu do Chrome (ou o botão no menu lateral). No iPhone, abra no Safari e toque em Compartilhar → Adicionar à Tela de Início.</p>
     </div>
   );
 }
@@ -786,7 +1012,7 @@ function NovoNegocio({ clientes, perfil, load, fechar }) {
   );
 }
 
-function Negocio({ n, perfil, vend, load, fechar }) {
+function Negocio({ n, perfil, vend, modelos = [], load, fechar }) {
   const PRODUTOS = useContext(ProdutosCtx);
   const [t, setT] = useState([]);
   const [h, setH] = useState([]);
@@ -908,11 +1134,13 @@ function Negocio({ n, perfil, vend, load, fechar }) {
         <div style={{ marginTop: 6 }}><Contatos clienteId={n.cliente_id} /></div>
       </div>
 
+      <MensagemPronta n={n} c={c} perfil={perfil} modelos={modelos} validade={vig?.valida_ate ? dataBR(vig.valida_ate) : ""} />
+
       <div style={S.card}>
         <b>Propostas</b>
         {props.map((p) => (
           <div key={p.id} style={{ padding: "6px 0", display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>{p.produto} — {brl(p.preco - p.desconto)} <StatusAprov p={p} /> <small style={{ color: C.mut }}>{new Date(p.created_at).toLocaleDateString("pt-BR")}</small></span>
+            <span style={{ flex: 1 }}>{p.produto} — {brl(p.preco - p.desconto)} <StatusAprov p={p} />{p.valida_ate && <small style={{ color: p.valida_ate < hojeStr() ? "#ff8a8a" : C.mut }}> · válida até {dataBR(p.valida_ate)}</small>} <small style={{ color: C.mut }}>{new Date(p.created_at).toLocaleDateString("pt-BR")}</small></span>
             <button style={S.ghost} onClick={() => setProp(p)}>Abrir</button>
           </div>
         ))}
@@ -1172,6 +1400,7 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
   const maxPct = Number(pr?.desconto_max ?? 10);
   const piso = tabela * (1 - maxPct / 100);
   const dentro = total >= piso - 0.005;
+  const validaAte = p.id && p.valida_ate ? p.valida_ate : addDias(hojeStr(), Number(p.validade_dias ?? 15));
   const descPct = tabela > 0 ? Math.round(1000 * (1 - total / tabela)) / 10 : 0;
   const [snap, setSnap] = useState(() => (p.id ? chaveProp(p) : ""));
   const mudou = chaveProp(p) !== snap;
@@ -1182,13 +1411,18 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
     setP({ ...p, produto: pr.nome, preco: pr.preco });
   };
   const salvar = async () => {
-    const { nova, id, created_at, negocio_id, status_aprov, preco_tabela, desconto_pct, aprovado_por, aprovado_em, obs_aprov, autor, ...dados } = p;
+    const { nova, id, created_at, negocio_id, status_aprov, preco_tabela, desconto_pct, aprovado_por, aprovado_em, obs_aprov, autor, valida_ate, ...dados } = p;
+    const dias = Math.max(1, Number(p.validade_dias ?? 15));
+    const payload = { ...dados, validade_dias: dias, valida_ate: addDias(hojeStr(), dias) };
     let rowId = p.id;
-    if (rowId) { const r = await sb.from("propostas").update(dados).eq("id", rowId); if (r.error) return alert(r.error.message); }
-    else { const r = await sb.from("propostas").insert({ ...dados, cliente_id: c.id, negocio_id: negocioId }).select().single(); if (r.error) return alert(r.error.message); rowId = r.data.id; }
+    if (rowId) { const r = await sb.from("propostas").update(payload).eq("id", rowId); if (r.error) return alert(r.error.message); }
+    else { const r = await sb.from("propostas").insert({ ...payload, cliente_id: c.id, negocio_id: negocioId }).select().single(); if (r.error) return alert(r.error.message); rowId = r.data.id; }
     const r2 = await sb.from("propostas").select("*").eq("id", rowId).single();
     if (r2.data) {
-      if (negocioId && ["ok", "aprovada"].includes(r2.data.status_aprov)) await sb.from("negocios").update({ preco: total, produto: p.produto }).eq("id", negocioId);
+      if (negocioId && ["ok", "aprovada"].includes(r2.data.status_aprov)) {
+        await sb.from("negocios").update({ preco: total, produto: p.produto }).eq("id", negocioId);
+        await agendaFollowups(negocioId, r2.data.valida_ate);
+      }
       const novo = !p.id || chaveProp(r2.data) !== snap;
       setP(r2.data); setSnap(chaveProp(r2.data));
       if (r2.data.status_aprov === "pendente" && novo) {
@@ -1230,7 +1464,7 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
       `Olá${primeiro ? ", " + primeiro : ""}! Segue a proposta da CabinCraft para ${c.igreja || c.nome}:`,
       "", `*${p.produto}*`, `Total: ${brl(total)}`,
       Number(p.entrada) > 0 || p.parcelas > 1 ? `Entrada de ${brl(p.entrada || 0)} + saldo em ${p.parcelas}x de ${brl(parc)}` : null,
-      `Prazo: ${p.prazo}`, "", "Qualquer dúvida, estou à disposição!", perfil.nome || "",
+      `Prazo: ${p.prazo}`, `Proposta válida até ${dataBR(validaAte)}`, "", "Qualquer dúvida, estou à disposição!", perfil.nome || "",
     ].filter((x) => x !== null);
     const texto = linhas.join("\n");
     const d = await gerarPdf();
@@ -1260,6 +1494,7 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
             <label>Parcelas<input style={S.in} type="number" min="1" value={p.parcelas} onChange={set("parcelas", true)} /></label>
           </div>
           <label>Prazo<input style={S.in} value={p.prazo} onChange={set("prazo")} /></label>
+          <label>Validade da proposta (dias)<input style={S.in} type="number" min="1" value={p.validade_dias ?? 15} onChange={set("validade_dias", true)} /></label>
           <label>Observações (cor do carpete, frete, etc.)<textarea style={{ ...S.in, height: 60 }} value={p.obs || ""} onChange={set("obs")} /></label>
           <div style={{ fontSize: 13, margin: "0 0 8px", color: dentro ? C.mut : "#ff8a8a" }}>
             Tabela {brl(tabela)} · desconto {descPct}% (limite {maxPct}%) · piso {brl(piso)}{!dentro && ` — ${statusMsg}`}
@@ -1312,6 +1547,7 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
           </div>
           <h4 style={{ marginBottom: 6 }}>Prazos e entrega</h4>
           <div style={{ fontSize: 14, color: "#444" }}>Produção: {p.prazo}. Frete a combinar. Instalação pela equipe técnica.</div>
+          <div style={{ fontSize: 14, color: "#444", marginTop: 6 }}><b>Proposta válida até {dataBR(validaAte)}.</b></div>
           {p.obs && <><h4 style={{ marginBottom: 6 }}>Observações</h4><div style={{ fontSize: 14, color: "#444", whiteSpace: "pre-wrap" }}>{p.obs}</div></>}
           <div style={{ marginTop: 30, fontSize: 13, color: "#666", borderTop: "1px solid #ddd", paddingTop: 10 }}>
             {perfil.nome}{perfil.whatsapp && ` · WhatsApp ${perfil.whatsapp}`} · Instagram @cabincraftbr

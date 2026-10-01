@@ -33,17 +33,17 @@ create table propostas (
 );
 
 -- Helpers
-create function is_approved() returns boolean language sql security definer stable as
-$$ select coalesce((select aprovado from profiles where id = auth.uid()), false) $$;
-create function is_admin() returns boolean language sql security definer stable as
-$$ select coalesce((select aprovado and role='admin' from profiles where id = auth.uid()), false) $$;
+create function is_approved() returns boolean language sql security definer stable set search_path = public as
+$$ select coalesce((select aprovado from public.profiles where id = auth.uid()), false) $$;
+create function is_admin() returns boolean language sql security definer stable set search_path = public as
+$$ select coalesce((select aprovado and role='admin' from public.profiles where id = auth.uid()), false) $$;
 
 -- Novo usuário: cria perfil pendente (o PRIMEIRO cadastro vira admin aprovado)
-create function handle_new_user() returns trigger language plpgsql security definer as $$
+create function handle_new_user() returns trigger language plpgsql security definer set search_path = public as $$
 declare primeiro boolean;
 begin
-  select not exists (select 1 from profiles) into primeiro;
-  insert into profiles (id, email, nome, role, aprovado)
+  select not exists (select 1 from public.profiles) into primeiro;
+  insert into public.profiles (id, email, nome, role, aprovado)
   values (new.id, new.email, new.raw_user_meta_data->>'nome',
           case when primeiro then 'admin' else 'vendedor' end, primeiro);
   return new;
