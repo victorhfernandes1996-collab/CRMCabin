@@ -175,6 +175,7 @@ function Crm({ perfil, recarrega }) {
   const [metas, setMetas] = useState([]);
   const [produtos, setProdutos] = useState(PRODUTOS_PADRAO);
   const [aprov, setAprov] = useState([]);
+  const [cliQ, setCliQ] = useState("");
   const [aberto, setAberto] = useState(null);
   const [v, setV] = useState(0);
   const [aberta, setAberta] = useState(() => {
@@ -224,6 +225,7 @@ function Crm({ perfil, recarrega }) {
           <button title="Sair" style={{ ...S.ghost, width: "100%" }} onClick={() => sb.auth.signOut()}>{aberta ? "Sair" : "⎋"}</button>
         </aside>
         <main style={{ flex: 1, minWidth: 0, padding: 16 }}>
+          <BuscaGlobal clientes={clientes} negocios={negocios} abrir={setAberto} irCliente={(q) => { setCliQ(q); setAba("clientes"); }} />
           {!perfil.whatsapp && aba !== "perfil" && (
             <div style={{ ...S.card, borderColor: C.or }}>
               Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
@@ -231,7 +233,7 @@ function Crm({ perfil, recarrega }) {
           )}
           {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} metas={metas} load={load} />}
           {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
-          {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} perfil={perfil} abrir={setAberto} load={load} />}
+          {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} perfil={perfil} abrir={setAberto} load={load} q={cliQ} setQ={setCliQ} />}
           {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} vend={vend} perfil={perfil} />}
           {aba === "admin" && <Admin />}
           {aba === "aprovacoes" && <Aprovacoes itens={aprov} vend={vend} load={load} />}
@@ -353,6 +355,7 @@ function Aprovacoes({ itens, vend, load }) {
     if (status === "recusada") { obs = window.prompt("Motivo da recusa (o vendedor vai ver):"); if (obs === null) return; }
     const r = await sb.from("propostas").update({ status_aprov: status, obs_aprov: obs }).eq("id", p.id);
     if (r.error) return alert(r.error.message);
+    if (status === "aprovada" && p.negocio_id) await sb.from("negocios").update({ preco: p.preco - p.desconto, produto: p.produto }).eq("id", p.negocio_id);
     if (p.negocio_id) await sb.from("historico").insert({ negocio_id: p.negocio_id, texto: status === "aprovada" ? `Desconto de ${p.desconto_pct}% APROVADO` : `Desconto de ${p.desconto_pct}% RECUSADO${obs ? ": " + obs : ""}` });
     load();
   };
@@ -371,6 +374,72 @@ function Aprovacoes({ itens, vend, load }) {
           <button style={{ ...S.btn, background: "#d64545" }} onClick={() => decidir(p, "recusada")}>✕ Recusar</button>
         </div>
       ))}
+    </div>
+  );
+}
+
+const MOTIVOS = ["Preço", "Concorrente", "Sem verba", "Sem resposta", "Adiou a decisão", "Fora do perfil", "Outro"];
+const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+function MotivoPerda({ onOk, onCancel }) {
+  const [m, setM] = useState("");
+  const [obs, setObs] = useState("");
+  const ok = () => {
+    if (!m) return alert("Escolha o motivo da perda.");
+    if (m === "Outro" && !obs.trim()) return alert("Descreva o motivo.");
+    onOk({ motivo: m, obs: obs.trim() });
+  };
+  return (
+    <Modal z={20}>
+      <div style={S.card}>
+        <b>Motivo da perda</b>
+        <select style={{ ...S.in, marginTop: 8 }} value={m} onChange={(e) => setM(e.target.value)}>
+          <option value="">Escolha…</option>
+          {MOTIVOS.map((x) => <option key={x}>{x}</option>)}
+        </select>
+        <textarea style={{ ...S.in, height: 70 }} placeholder={m === "Outro" ? "Descreva o motivo (obrigatório)" : "Observação (opcional)"} value={obs} onChange={(e) => setObs(e.target.value)} />
+        <button style={{ ...S.btn, background: "#d64545" }} onClick={ok}>Confirmar perda</button> <button style={S.ghost} onClick={onCancel}>Cancelar</button>
+      </div>
+    </Modal>
+  );
+}
+
+function BuscaGlobal({ clientes, negocios, abrir, irCliente }) {
+  const [q, setQ] = useState("");
+  const [foco, setFoco] = useState(false);
+  const [cts, setCts] = useState([]);
+  useEffect(() => {
+    if (q.trim().length < 2) { setCts([]); return; }
+    const t = setTimeout(async () => {
+      const s = q.trim().replace(/[%,()]/g, " ");
+      const r = await sb.from("contatos").select("id, nome, cargo, telefone, cliente_id, clientes(nome)")
+        .or(`nome.ilike.%${s}%,telefone.ilike.%${s}%,email.ilike.%${s}%`).limit(6);
+      setCts(r.data || []);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q]);
+  const nq = norm(q.trim());
+  const ativo = foco && nq.length >= 2;
+  const ns = ativo ? negocios.filter((n) => norm(`${n.titulo} ${n.clientes?.nome || ""}`).includes(nq)).slice(0, 6) : [];
+  const cs = ativo ? clientes.filter((c) => norm(`${c.nome} ${c.igreja || ""} ${c.telefone || ""} ${c.cidade || ""}`).includes(nq)).slice(0, 6) : [];
+  const fecha = () => { setFoco(false); setQ(""); };
+  const item = { padding: "8px 12px", cursor: "pointer", fontSize: 14, borderTop: `1px solid ${C.line}` };
+  const tit = { padding: "6px 12px", fontSize: 11, color: C.mut, textTransform: "uppercase" };
+  return (
+    <div style={{ position: "relative", maxWidth: 460, marginBottom: 14 }}>
+      <input style={{ ...S.in, marginBottom: 0 }} placeholder="🔎 Buscar cliente, negócio ou contato…" value={q}
+        onChange={(e) => setQ(e.target.value)} onFocus={() => setFoco(true)} onBlur={() => setTimeout(() => setFoco(false), 150)} />
+      {ativo && (
+        <div style={{ position: "absolute", zIndex: 6, left: 0, right: 0, top: "100%", marginTop: 4, background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, maxHeight: 380, overflow: "auto" }}>
+          {ns.length > 0 && <div style={tit}>Negócios</div>}
+          {ns.map((n) => <div key={n.id} style={item} onClick={() => { abrir(n.id); fecha(); }}>{n.titulo} <span style={{ color: C.mut }}>· {n.clientes?.nome}</span> <Badge s={n.status} /></div>)}
+          {cs.length > 0 && <div style={tit}>Clientes</div>}
+          {cs.map((c) => <div key={c.id} style={item} onClick={() => { irCliente(c.nome); fecha(); }}>{c.nome} <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`}</span></div>)}
+          {cts.length > 0 && <div style={tit}>Contatos</div>}
+          {cts.map((c) => <div key={c.id} style={item} onClick={() => { irCliente(c.clientes?.nome || ""); fecha(); }}>{c.nome} <span style={{ color: C.mut }}>{c.cargo} · {c.telefone} · {c.clientes?.nome}</span></div>)}
+          {!ns.length && !cs.length && !cts.length && <div style={{ padding: 12, color: C.mut, fontSize: 14 }}>Nada encontrado.</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -657,7 +726,7 @@ function Negocios({ negocios, clientes, vend, pend, perfil, abrir, load }) {
             <div key={n.id} style={{ ...S.card, cursor: "pointer", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }} onClick={() => abrir(n.id)}>
               <div style={{ flex: 1 }}>
                 <b>{n.titulo}</b> <span style={{ color: C.mut }}>{n.clientes?.nome} · {nomeDe(vend, n.owner)}</span>
-                {n.motivo_perda && <div style={{ color: C.mut, fontSize: 13 }}>Motivo: {n.motivo_perda}</div>}
+                {n.motivo_perda && <div style={{ color: C.mut, fontSize: 13 }}>Motivo: {n.motivo_perda}{n.motivo_obs ? ` — ${n.motivo_obs}` : ""}</div>}
               </div>
               <span style={{ color: C.or, fontWeight: 700 }}>{brl(n.preco)}</span>
               {n.fechado_em && <small style={{ color: C.mut }}>{new Date(n.fechado_em).toLocaleDateString("pt-BR")}</small>}
@@ -735,16 +804,32 @@ function Negocio({ n, perfil, vend, load, fechar }) {
   const log = (texto) => sb.from("historico").insert({ negocio_id: n.id, texto });
   const salva = async (v) => { await sb.from("negocios").update(v).eq("id", n.id); load(); };
   const [pedirEt, setPedirEt] = useState(null);
+  const [perdendo, setPerdendo] = useState(false);
+  const vig = props[0];
+  const prodN = PRODUTOS.find((x) => x.nome === n.produto);
+  const minimo = prodN ? Number(prodN.preco) * (1 - Number(prodN.desconto_max ?? 10) / 100) : 0;
+  let bloqGanho = "";
+  if (perfil.role !== "admin") {
+    if (vig?.status_aprov === "pendente") bloqGanho = "há desconto aguardando aprovação do admin.";
+    else if (vig?.status_aprov === "recusada") bloqGanho = "o desconto foi recusado. Ajuste a proposta e envie de novo.";
+    else if (prodN && Number(n.preco) < (vig?.status_aprov === "aprovada" ? Math.min(minimo, vig.preco - vig.desconto) : minimo) - 0.005) bloqGanho = "o valor está abaixo do mínimo permitido. Gere uma proposta e peça aprovação do desconto.";
+  }
+  const excluirNeg = async () => {
+    if (n.status !== "aberto" && perfil.role !== "admin") return alert("Só o admin pode excluir negócios já encerrados.");
+    if (!window.confirm("Excluir este negócio com suas atividades, propostas e histórico? Isso não pode ser desfeito.")) return;
+    const r = await sb.from("negocios").delete().eq("id", n.id);
+    if (r.error) return alert(r.error.message);
+    await load(); fechar();
+  };
   const moverEtapa = async (et) => { await sb.from("negocios").update({ etapa: et }).eq("id", n.id); await log(`Movido para ${et}`); load(); carrega(); };
-  const encerrar = async (status) => {
-    let motivo = null;
-    if (status === "perdido") { motivo = window.prompt("Motivo da perda?"); if (motivo === null) return; }
-    await sb.from("negocios").update({ status, motivo_perda: motivo, fechado_em: new Date().toISOString() }).eq("id", n.id);
-    await log(status === "ganho" ? "Marcado como GANHO" : `Marcado como PERDIDO${motivo ? ": " + motivo : ""}`);
+  const encerrar = async (status, extra = {}) => {
+    const r = await sb.from("negocios").update({ status, motivo_perda: extra.motivo || null, motivo_obs: extra.obs || null, fechado_em: new Date().toISOString() }).eq("id", n.id);
+    if (r.error) return alert(r.error.message);
+    await log(status === "ganho" ? "Marcado como GANHO" : `Marcado como PERDIDO: ${extra.motivo}${extra.obs ? " — " + extra.obs : ""}`);
     await load(); carrega();
   };
   const reabrir = async () => {
-    await sb.from("negocios").update({ status: "aberto", motivo_perda: null, fechado_em: null }).eq("id", n.id);
+    await sb.from("negocios").update({ status: "aberto", motivo_perda: null, motivo_obs: null, fechado_em: null }).eq("id", n.id);
     await log("Negócio reaberto"); await load(); carrega();
   };
   const addT = async () => {
@@ -770,11 +855,14 @@ function Negocio({ n, perfil, vend, load, fechar }) {
               onChange={(e) => { const et = e.target.value; const tem = t.some((x) => !x.feita && (!x.vencimento || x.vencimento >= hojeStr())); if (!tem) return setPedirEt(et); moverEtapa(et); }}>
               {ETAPAS.map((x) => <option key={x}>{x}</option>)}
             </select>
-            <button style={{ ...S.btn, background: "#2ea34f" }} onClick={() => encerrar("ganho")}>✓ Ganho</button>
-            <button style={{ ...S.btn, background: "#d64545" }} onClick={() => encerrar("perdido")}>✕ Perdido</button>
+            <button disabled={!!bloqGanho} title={bloqGanho} style={{ ...S.btn, background: "#2ea34f", opacity: bloqGanho ? 0.4 : 1 }} onClick={() => encerrar("ganho")}>✓ Ganho</button>
+            <button style={{ ...S.btn, background: "#d64545" }} onClick={() => setPerdendo(true)}>✕ Perdido</button>
           </>) : <button style={S.ghost} onClick={reabrir}>Reabrir negócio</button>}
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap", alignItems: "center", color: C.mut, fontSize: 13 }}>
+          <label>Título{" "}
+            <input key={n.titulo} style={{ ...S.in, width: 210, marginBottom: 0 }} defaultValue={n.titulo} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== n.titulo && salva({ titulo: e.target.value.trim() })} />
+          </label>
           <label>Origem{" "}
             <select style={{ ...S.in, width: 160, marginBottom: 0 }} value={n.origem || ""} onChange={(e) => salva({ origem: e.target.value || null })}>
               <option value="">—</option>
@@ -797,7 +885,8 @@ function Negocio({ n, perfil, vend, load, fechar }) {
             </select>
           </label>
         )}
-        {n.motivo_perda && <p style={{ color: C.mut }}>Motivo da perda: {n.motivo_perda}</p>}
+        {bloqGanho && n.status === "aberto" && <p style={{ color: "#ff8a8a", fontSize: 13, margin: "8px 0 0" }}>Para marcar como ganho: {bloqGanho}</p>}
+        {n.motivo_perda && <p style={{ color: C.mut }}>Motivo da perda: {n.motivo_perda}{n.motivo_obs ? ` — ${n.motivo_obs}` : ""}</p>}
       </div>
 
       <div style={S.card}>
@@ -838,6 +927,8 @@ function Negocio({ n, perfil, vend, load, fechar }) {
           </div>
         ))}
       </div>
+      <div style={{ textAlign: "right", marginBottom: 24 }}><button style={{ ...S.ghost, color: "#ff8a8a" }} onClick={excluirNeg}>Excluir negócio</button></div>
+      {perdendo && <MotivoPerda onCancel={() => setPerdendo(false)} onOk={(m) => { setPerdendo(false); encerrar("perdido", m); }} />}
       {pedirEt && <ProximaAtividade n={n} etapa={pedirEt} onCancel={() => setPedirEt(null)} onOk={() => { const et = pedirEt; setPedirEt(null); moverEtapa(et); }} />}
       {prop && <Proposta c={c} p={prop} perfil={perfil} negocioId={n.id} fechar={() => { setProp(null); carrega(); load(); }} />}
     </Modal>
@@ -969,10 +1060,13 @@ function Atividades({ abrir, negocios, vend, perfil }) {
   );
 }
 
-function Clientes({ clientes, negocios, perfil, abrir, load }) {
-  const [dup, setDup] = useState([]);
+function Clientes({ clientes, negocios, perfil, abrir, load, q, setQ }) {
   const [f, setF] = useState({ nome: "", igreja: "", telefone: "", cidade: "" });
+  const [dup, setDup] = useState([]);
   const [abre, setAbre] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const [mescla, setMescla] = useState(null);
+  const admin = perfil.role === "admin";
   const add = async (force = false) => {
     if (!f.nome.trim()) return;
     if (!force) { const d = await acharDuplicados(f.nome.trim(), f.telefone, f.igreja); if (d.length) { setDup(d); return; } }
@@ -982,6 +1076,30 @@ function Clientes({ clientes, negocios, perfil, abrir, load }) {
     setDup([]);
     load();
   };
+  const salvarEdit = async () => {
+    if (!edit.nome.trim()) return;
+    const { id, nome, igreja, telefone, cidade } = edit;
+    const r = await sb.from("clientes").update({ nome: nome.trim(), igreja, telefone, cidade }).eq("id", id);
+    if (r.error) return alert(r.error.message);
+    setEdit(null); load();
+  };
+  const excluir = async (c) => {
+    const nn = negocios.filter((n) => n.cliente_id === c.id).length;
+    if (nn) return alert(`Este cliente tem ${nn} negócio(s). Mescle com outro cliente ou exclua os negócios antes.`);
+    if (!window.confirm(`Excluir o cliente “${c.nome}” e seus contatos?`)) return;
+    const r = await sb.from("clientes").delete().eq("id", c.id);
+    if (r.error) return alert(r.error.message);
+    load();
+  };
+  const mesclar = async () => {
+    if (!mescla.destino) return alert("Escolha o cliente que vai ficar.");
+    if (!window.confirm("Mover negócios, atividades, propostas e contatos para o cliente escolhido e excluir este cadastro?")) return;
+    const r = await sb.rpc("mesclar_clientes", { p_origem: mescla.origem, p_destino: mescla.destino });
+    if (r.error) return alert(r.error.message);
+    setMescla(null); load();
+  };
+  const lista = clientes.filter((c) => !q || norm(`${c.nome} ${c.igreja || ""} ${c.cidade || ""} ${c.telefone || ""}`).includes(norm(q)));
+  const w = { ...S.in, marginBottom: 0, flex: 1, minWidth: 130 };
   return (
     <div>
       <div style={S.card}>
@@ -992,14 +1110,41 @@ function Clientes({ clientes, negocios, perfil, abrir, load }) {
         {dup.length > 0 && <AvisoDuplicado lista={dup} perfil={perfil} onMesmoAssim={() => add(true)} />}
         <button style={S.btn} onClick={() => add()}>Adicionar</button>
       </div>
-      {clientes.map((c) => (
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
+        <input style={{ ...S.in, marginBottom: 0, maxWidth: 320 }} placeholder="Filtrar clientes…" value={q} onChange={(e) => setQ(e.target.value)} />
+        {q && <button style={S.ghost} onClick={() => setQ("")}>Limpar</button>}
+        <span style={{ color: C.mut, fontSize: 13 }}>{lista.length} cliente(s)</span>
+      </div>
+      {lista.map((c) => (
         <div key={c.id} style={S.card}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ flex: 1 }}>
-              <b>{c.nome}</b> <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`} {c.telefone && `· ${c.telefone}`}</span>
-            </span>
-            <button style={S.ghost} onClick={() => setAbre(abre === c.id ? null : c.id)}>{abre === c.id ? "Ocultar contatos" : "Contatos"}</button>
-          </div>
+          {edit?.id === c.id ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {["nome", "igreja", "telefone", "cidade"].map((k) => (
+                <input key={k} style={w} placeholder={k[0].toUpperCase() + k.slice(1)} value={edit[k] || ""} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} />
+              ))}
+              <button style={S.btn} onClick={salvarEdit}>Salvar</button> <button style={S.ghost} onClick={() => setEdit(null)}>Cancelar</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 200 }}>
+                <b>{c.nome}</b> <span style={{ color: C.mut }}>{c.igreja} {c.cidade && `· ${c.cidade}`} {c.telefone && `· ${c.telefone}`}</span>
+              </span>
+              <button style={S.ghost} onClick={() => setAbre(abre === c.id ? null : c.id)}>{abre === c.id ? "Ocultar contatos" : "Contatos"}</button>
+              <button style={S.ghost} onClick={() => setEdit({ id: c.id, nome: c.nome, igreja: c.igreja, telefone: c.telefone, cidade: c.cidade })}>Editar</button>
+              <button style={S.ghost} onClick={() => setMescla({ origem: c.id, destino: "" })}>Mesclar</button>
+              <button style={{ ...S.ghost, color: "#ff8a8a" }} onClick={() => excluir(c)}>Excluir</button>
+            </div>
+          )}
+          {mescla?.origem === c.id && (
+            <div style={{ marginTop: 10, padding: 10, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+              <div style={{ fontSize: 13, color: C.mut, marginBottom: 6 }}>Mesclar “{c.nome}” em qual cliente? Este cadastro será excluído e tudo vai para o escolhido.</div>
+              <select style={S.in} value={mescla.destino} onChange={(e) => setMescla({ ...mescla, destino: e.target.value })}>
+                <option value="">Cliente que vai ficar…</option>
+                {clientes.filter((x) => x.id !== c.id && (admin || x.owner === perfil.id)).map((x) => <option key={x.id} value={x.id}>{x.nome}{x.igreja ? ` — ${x.igreja}` : ""}</option>)}
+              </select>
+              <button style={S.btn} onClick={mesclar}>Mesclar</button> <button style={S.ghost} onClick={() => setMescla(null)}>Cancelar</button>
+            </div>
+          )}
           <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {negocios.filter((n) => n.cliente_id === c.id).map((n) => (
               <span key={n.id} style={{ cursor: "pointer" }} onClick={() => abrir(n.id)}><Badge s={n.status} /> {n.titulo} · {brl(n.preco)}</span>
@@ -1041,9 +1186,9 @@ function Proposta({ c, p: inicial, fechar, perfil, negocioId }) {
     let rowId = p.id;
     if (rowId) { const r = await sb.from("propostas").update(dados).eq("id", rowId); if (r.error) return alert(r.error.message); }
     else { const r = await sb.from("propostas").insert({ ...dados, cliente_id: c.id, negocio_id: negocioId }).select().single(); if (r.error) return alert(r.error.message); rowId = r.data.id; }
-    if (negocioId) await sb.from("negocios").update({ preco: total, produto: p.produto }).eq("id", negocioId);
     const r2 = await sb.from("propostas").select("*").eq("id", rowId).single();
     if (r2.data) {
+      if (negocioId && ["ok", "aprovada"].includes(r2.data.status_aprov)) await sb.from("negocios").update({ preco: total, produto: p.produto }).eq("id", negocioId);
       const novo = !p.id || chaveProp(r2.data) !== snap;
       setP(r2.data); setSnap(chaveProp(r2.data));
       if (r2.data.status_aprov === "pendente" && novo) {
