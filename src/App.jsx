@@ -247,11 +247,11 @@ function Crm({ perfil, recarrega }) {
               Preencha seu WhatsApp em <b style={{ color: C.or, cursor: "pointer" }} onClick={() => setAba("perfil")}>Meu perfil</b>. Ele aparece nas suas propostas.
             </div>
           )}
-          {aba === "meudia" && <MeuDia perfil={perfil} negocios={negocios} pend={pend} aprov={aprov} vencendo={vencendo} metas={metas} vend={vend} abrir={setAberto} ir={setAba} load={load} />}
+          {aba === "meudia" && <MeuDia perfil={perfil} negocios={negocios} clientes={clientes} pend={pend} aprov={aprov} vencendo={vencendo} metas={metas} vend={vend} abrir={setAberto} ir={setAba} load={load} />}
           {aba === "painel" && <Painel negocios={negocios} vend={vend} pend={pend} perfil={perfil} metas={metas} load={load} />}
           {aba === "negocios" && <Negocios negocios={negocios} clientes={clientes} vend={vend} pend={pend} perfil={perfil} abrir={setAberto} load={load} />}
           {aba === "clientes" && <Clientes clientes={clientes} negocios={negocios} perfil={perfil} abrir={setAberto} load={load} q={cliQ} setQ={setCliQ} />}
-          {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} vend={vend} perfil={perfil} />}
+          {aba === "atividades" && <Atividades key={v} abrir={setAberto} negocios={negocios} clientes={clientes} vend={vend} perfil={perfil} />}
           {aba === "admin" && <Admin />}
           {aba === "aprovacoes" && <Aprovacoes itens={aprov} vend={vend} load={load} />}
           {aba === "produtos" && <Produtos recarrega={load} />}
@@ -492,8 +492,9 @@ async function agendaFollowups(negocioId, validaAte) {
   await sb.from("tarefas").insert(lista);
 }
 
-function MeuDia({ perfil, negocios, pend, aprov, vencendo, metas, vend, abrir, ir, load }) {
+function MeuDia({ perfil, negocios, clientes, pend, aprov, vencendo, metas, vend, abrir, ir, load }) {
   const [t, setT] = useState([]);
+  const [novo, setNovo] = useState(false);
   const h = hojeStr();
   const carrega = async () => setT((await sb.from("tarefas").select("*, clientes(nome), negocios(id, titulo)")
     .eq("feita", false).eq("owner", perfil.id).lte("vencimento", h).order("vencimento").order("hora")).data || []);
@@ -534,6 +535,10 @@ function MeuDia({ perfil, negocios, pend, aprov, vencendo, metas, vend, abrir, i
     <div>
       <h2 style={{ margin: "0 0 2px" }}>{saud}{primeiro ? `, ${primeiro}` : ""}!</h2>
       <div style={{ color: C.mut, marginBottom: 14, textTransform: "capitalize" }}>{new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })}</div>
+      <div style={{ marginBottom: 12 }}>
+        <button style={S.btn} onClick={() => setNovo(!novo)}>+ Nova atividade</button>
+        {novo && <div style={{ ...S.card, marginTop: 10 }}><AtividadeForm negocios={negocios} clientes={clientes} onSaved={() => { carrega(); load(); }} /></div>}
+      </div>
       {vazio && <div style={S.card}>Tudo em dia por aqui. 🎉 Que tal prospectar um novo cliente?</div>}
       {admin && aprov.length > 0 && (
         <div style={{ ...S.card, borderColor: C.or }}>
@@ -1167,15 +1172,19 @@ const TIPOS = { tarefa: "📝 Tarefa", ligacao: "📞 Ligação", whatsapp: "�
 const icone = (t) => (TIPOS[t] || TIPOS.tarefa).split(" ")[0];
 const horaFmt = (x) => (x.hora ? ` ${x.hora.slice(0, 5)}` : "");
 
-function AtividadeForm({ negocios, fixo, onSaved }) {
-  const [f, setF] = useState({ negocio_id: fixo?.id || "", tipo: "tarefa", titulo: "", vencimento: "", hora: "" });
+function AtividadeForm({ negocios, clientes = [], fixo, onSaved }) {
+  const [f, setF] = useState({ vinculo: "", tipo: "tarefa", titulo: "", vencimento: "", hora: "" });
   const salvar = async () => {
-    const n = fixo || negocios.find((x) => x.id === f.negocio_id);
-    if (!n) return alert("Escolha o negócio.");
     if (!f.titulo.trim()) return;
+    let cliente_id = null, negocio_id = null, owner;
+    if (fixo) { cliente_id = fixo.cliente_id; negocio_id = fixo.id; owner = fixo.owner || undefined; }
+    else if (f.vinculo.startsWith("n:")) {
+      const n = negocios.find((x) => x.id === f.vinculo.slice(2));
+      if (n) { negocio_id = n.id; cliente_id = n.cliente_id; owner = n.owner || undefined; }
+    } else if (f.vinculo.startsWith("c:")) cliente_id = f.vinculo.slice(2);
     const r = await sb.from("tarefas").insert({
-      cliente_id: n.cliente_id, negocio_id: n.id, titulo: f.titulo, tipo: f.tipo,
-      vencimento: f.vencimento || null, hora: f.hora || null, owner: n.owner || undefined,
+      cliente_id, negocio_id, titulo: f.titulo, tipo: f.tipo,
+      vencimento: f.vencimento || null, hora: f.hora || null, owner,
     });
     if (r.error) return alert(r.error.message);
     setF({ ...f, titulo: "", vencimento: "", hora: "" });
@@ -1185,9 +1194,14 @@ function AtividadeForm({ negocios, fixo, onSaved }) {
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
       {!fixo && (
-        <select style={{ ...w, width: 220 }} value={f.negocio_id} onChange={(e) => setF({ ...f, negocio_id: e.target.value })}>
-          <option value="">Negócio…</option>
-          {negocios.filter((n) => n.status === "aberto").map((n) => <option key={n.id} value={n.id}>{n.titulo} — {n.clientes?.nome}</option>)}
+        <select style={{ ...w, width: 230 }} value={f.vinculo} onChange={(e) => setF({ ...f, vinculo: e.target.value })}>
+          <option value="">Sem vínculo (tarefa geral)</option>
+          <optgroup label="Negócios em aberto">
+            {negocios.filter((n) => n.status === "aberto").map((n) => <option key={n.id} value={`n:${n.id}`}>{n.titulo} — {n.clientes?.nome}</option>)}
+          </optgroup>
+          <optgroup label="Clientes">
+            {clientes.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.nome}{c.igreja ? ` — ${c.igreja}` : ""}</option>)}
+          </optgroup>
         </select>
       )}
       <select style={{ ...w, width: 140 }} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
@@ -1239,7 +1253,7 @@ function Contatos({ clienteId }) {
   );
 }
 
-function Atividades({ abrir, negocios, vend, perfil }) {
+function Atividades({ abrir, negocios, clientes, vend, perfil }) {
   const [t, setT] = useState([]);
   const [vf, setVf] = useState("todos");
   const [novo, setNovo] = useState(false);
@@ -1254,6 +1268,7 @@ function Atividades({ abrir, negocios, vend, perfil }) {
     ["Sem data", l0.filter((x) => !x.vencimento), C.mut],
   ];
   const concluir = async (x) => { await sb.from("tarefas").update({ feita: true }).eq("id", x.id); load(); };
+  const apagar = async (x) => { if (!window.confirm("Excluir esta atividade?")) return; await sb.from("tarefas").delete().eq("id", x.id); load(); };
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
@@ -1265,7 +1280,7 @@ function Atividades({ abrir, negocios, vend, perfil }) {
           </select>
         )}
       </div>
-      {novo && <div style={S.card}><AtividadeForm negocios={negocios} onSaved={load} /></div>}
+      {novo && <div style={S.card}><AtividadeForm negocios={negocios} clientes={clientes} onSaved={load} /></div>}
       {grupos.map(([nome, l, cor]) => (
         <div key={nome} style={S.card}>
           <b style={{ color: cor }}>{nome} ({l.length})</b>
@@ -1276,9 +1291,11 @@ function Atividades({ abrir, negocios, vend, perfil }) {
                 {icone(x.tipo)} {x.titulo}
                 {x.negocios && <span style={{ color: C.or, cursor: "pointer" }} onClick={() => abrir(x.negocios.id)}> · {x.negocios.titulo}</span>}
                 {x.clientes && <span style={{ color: C.mut }}> · {x.clientes.nome}</span>}
+                {!x.negocios && !x.clientes && <span style={{ color: C.mut }}> · geral</span>}
                 {perfil.role === "admin" && <span style={{ color: C.mut }}> · {nomeDe(vend, x.owner)}</span>}
               </span>
               {x.vencimento && <small style={{ color: cor }}>{dataBR(x.vencimento)}{horaFmt(x)}</small>}
+              <button style={{ ...S.ghost, padding: "2px 8px" }} title="Excluir" onClick={() => apagar(x)}>×</button>
             </div>
           ))}
           {!l.length && <div style={{ color: C.mut, fontSize: 13 }}>Nenhuma.</div>}
